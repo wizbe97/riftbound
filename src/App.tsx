@@ -1,17 +1,20 @@
 // src/App.tsx
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
-import Navbar from './components/layout/Navbar'
-import HomePage from './pages/HomePage'
-import PlayPage from './pages/PlayPage'
-import DecksPage from './pages/DecksPage'
-import RulesPage from './pages/RulesPage'
-import ProfilePage from './pages/ProfilePage'
-import FriendsSidebar from './components/friends/FriendsSidebar'
-import PrivateMatchLobbyPage from './pages/PrivateMatchLobbyPage'
-import { useAuth } from './contexts/AuthContext'
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import Navbar from './components/layout/Navbar';
+import HomePage from './pages/HomePage';
+import PlayPage from './pages/PlayPage';
+import DecksPage from './pages/DecksPage';
+import RulesPage from './pages/RulesPage';
+import ProfilePage from './pages/ProfilePage';
+import FriendsSidebar from './components/friends/FriendsSidebar';
+import PrivateMatchLobbyPage from './pages/PrivateMatchLobbyPage';
+import CardGalleryPage from './pages/CardGalleryPage';
+import CreateDeckPage from './pages/CreateDeckPage';
+import DeckDetailPage from './pages/DeckDetailPage';
+import { useAuth } from './contexts/AuthContext';
 
 function App() {
-  const { user } = useAuth()
+  const { user } = useAuth();
 
   return (
     <BrowserRouter>
@@ -20,7 +23,6 @@ function App() {
         {/* Left side: navbar + page content */}
         <div className="flex min-w-0 flex-1 flex-col">
           <Navbar />
-
           <main className="flex-1">
             <div className="mx-auto w-full max-w-6xl px-4 py-6">
               <Routes>
@@ -31,6 +33,19 @@ function App() {
                   element={<PrivateMatchLobbyPage />}
                 />
                 <Route path="/decks" element={<DecksPage />} />
+                <Route
+                  path="/decks/create"
+                  element={<CreateDeckPage />}
+                />
+                <Route
+                  path="/decks/:deckId"
+                  element={<DeckDetailPage />}
+                />
+                <Route
+                  path="/decks/:deckId/edit"
+                  element={<CreateDeckPage />}
+                />
+                <Route path="/cards" element={<CardGalleryPage />} />
                 <Route path="/rules" element={<RulesPage />} />
                 <Route path="/profile" element={<ProfilePage />} />
                 {/* TODO: 404 page later */}
@@ -43,8 +58,7 @@ function App() {
         {user && <FriendsSidebar />}
       </div>
     </BrowserRouter>
-  )
+  );
 }
 
-export default App
-
+export default App;
