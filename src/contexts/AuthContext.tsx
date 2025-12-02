@@ -16,10 +16,14 @@ import {
 import type { User } from 'firebase/auth'
 import { auth, db } from '../firebase'
 import {
+  collection,
   doc,
   getDoc,
+  getDocs,
+  query,
   serverTimestamp,
   setDoc,
+  where,
 } from 'firebase/firestore'
 
 const FRIEND_CODE_LENGTH = 5
@@ -78,6 +82,64 @@ async function generateUniqueFriendCode(uid: string): Promise<string> {
   throw err
 }
 
+/**
+ * Ensure the users/{uid} profile has a real friendCode.
+ * - If users doc has a non-placeholder friendCode, reuse it.
+ * - Else try to find an existing mapping in friendCodes.
+ * - Else generate a new code.
+ * Returns { email, username, friendCode }.
+ */
+async function ensureUserProfileWithFriendCode(firebaseUser: User) {
+  const uid = firebaseUser.uid
+  const userDocRef = doc(db, 'users', uid)
+  const snap = await getDoc(userDocRef)
+
+  let email = firebaseUser.email ?? ''
+  let username = firebaseUser.displayName ?? 'Player'
+  let friendCode: string | undefined
+
+  if (snap.exists()) {
+    const data = snap.data() as any
+    email = data.email ?? email
+    username = data.username ?? username
+    friendCode = data.friendCode
+  }
+
+  // If friendCode missing or placeholder, try to recover it from friendCodes map
+  if (!friendCode || friendCode === '-----') {
+    const codesRef = collection(db, 'friendCodes')
+    const q = query(codesRef, where('uid', '==', uid))
+    const qsnap = await getDocs(q)
+
+    if (!qsnap.empty) {
+      // Reuse existing code from friendCodes collection
+      friendCode = qsnap.docs[0].id
+    } else {
+      // No mapping: create a fresh code and mapping
+      friendCode = await generateUniqueFriendCode(uid)
+    }
+
+    // Persist back onto the users doc
+    await setDoc(
+      userDocRef,
+      {
+        uid,
+        email,
+        username,
+        friendCode,
+        status: 'online',
+        lastActive: serverTimestamp(),
+        createdAt: snap.exists()
+          ? (snap.data() as any)?.createdAt ?? serverTimestamp()
+          : serverTimestamp(),
+      },
+      { merge: true },
+    )
+  }
+
+  return { email, username, friendCode: friendCode as string }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [profile, setProfile] = useState<UserProfile | null>(null)
@@ -88,44 +150,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setUser(firebaseUser)
 
-      if (firebaseUser) {
-        try {
-          const userDocRef = doc(db, 'users', firebaseUser.uid)
-          const snap = await getDoc(userDocRef)
-          if (snap.exists()) {
-            const data = snap.data() as any
-            setProfile({
-              uid: data.uid ?? firebaseUser.uid,
-              email: data.email ?? firebaseUser.email ?? '',
-              username: data.username ?? firebaseUser.displayName ?? 'Player',
-              friendCode: data.friendCode ?? '-----',
-            })
-          } else {
-            // No profile doc yet – fall back to auth info
-            setProfile({
-              uid: firebaseUser.uid,
-              email: firebaseUser.email ?? '',
-              username: firebaseUser.displayName ?? 'Player',
-              friendCode: '-----',
-            })
-          }
-        } catch (err) {
-          console.error(
-            '[AuthProvider] Failed to load user profile, using auth only',
-            err,
-          )
-          setProfile({
-            uid: firebaseUser.uid,
-            email: firebaseUser.email ?? '',
-            username: firebaseUser.displayName ?? 'Player',
-            friendCode: '-----',
-          })
-        }
-      } else {
+      if (!firebaseUser) {
         setProfile(null)
+        setLoading(false)
+        return
       }
 
-      setLoading(false)
+      try {
+        const { email, username, friendCode } =
+          await ensureUserProfileWithFriendCode(firebaseUser)
+
+        setProfile({
+          uid: firebaseUser.uid,
+          email,
+          username,
+          friendCode,
+        })
+      } catch (err) {
+        console.error(
+          '[AuthProvider] Failed to load user profile, using auth only',
+          err,
+        )
+        setProfile({
+          uid: firebaseUser.uid,
+          email: firebaseUser.email ?? '',
+          username: firebaseUser.displayName ?? 'Player',
+          friendCode: '-----',
+        })
+      } finally {
+        setLoading(false)
+      }
     })
 
     return () => unsubscribe()
@@ -161,10 +215,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    // Immediately mark online
     void setOnline()
 
-    // Refresh lastActive while the page is open
     const intervalId = window.setInterval(() => {
       void setOnline()
     }, 60_000)
@@ -201,14 +253,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw err
     }
 
-    // 1) Create Auth user (this also signs you in)
     const cred = await createUserWithEmailAndPassword(auth, email, password)
     const uid = cred.user.uid
 
-    // 2) Set displayName = username
     await updateProfile(cred.user, { displayName: trimmedUsername })
 
-    // 3) Best-effort Firestore profile + unique friend code
     let friendCode = '-----'
     try {
       friendCode = await generateUniqueFriendCode(uid)
@@ -230,7 +279,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       )
     }
 
-    // 4) Update in-memory profile from auth + friendCode
     setProfile({
       uid,
       email,

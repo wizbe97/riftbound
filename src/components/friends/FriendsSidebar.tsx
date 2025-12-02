@@ -1,15 +1,17 @@
 // src/components/friends/FriendsSidebar.tsx
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext'
 import { db } from '../../firebase'
 import {
+  arrayUnion,
   collection,
   doc,
   getDoc,
   onSnapshot,
   serverTimestamp,
   setDoc,
+  updateDoc,
   type Timestamp,
 } from 'firebase/firestore'
 
@@ -32,10 +34,22 @@ type FriendStatus = {
   lastActive?: Timestamp
 }
 
+type LobbyInvite = {
+  id: string
+  lobbyId: string
+  fromUid: string
+  fromUsername: string
+  role: 'player2' | 'spectator'
+  status: string
+}
+
 function FriendsSidebar() {
   const { user, profile } = useAuth()
+  const navigate = useNavigate()
+
   const [friends, setFriends] = useState<Friend[]>([])
   const [requests, setRequests] = useState<FriendRequest[]>([])
+  const [lobbyInvites, setLobbyInvites] = useState<LobbyInvite[]>([])
   const [friendStatuses, setFriendStatuses] = useState<
     Record<string, FriendStatus>
   >({})
@@ -47,16 +61,18 @@ function FriendsSidebar() {
   const [busy, setBusy] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
 
-  // Subscribe to friend list + incoming requests
+  // Subscribe to friend list + friend requests + lobby invites
   useEffect(() => {
     if (!user) {
       setFriends([])
       setRequests([])
+      setLobbyInvites([])
       return
     }
 
     const friendsRef = collection(db, 'users', user.uid, 'friends')
     const requestsRef = collection(db, 'users', user.uid, 'friendRequests')
+    const lobbyInvitesRef = collection(db, 'users', user.uid, 'lobbyInvites')
 
     const unsubFriends = onSnapshot(friendsRef, (snap) => {
       const data: Friend[] = snap.docs.map((d) => {
@@ -84,9 +100,25 @@ function FriendsSidebar() {
       setRequests(data)
     })
 
+    const unsubLobbyInvites = onSnapshot(lobbyInvitesRef, (snap) => {
+      const data: LobbyInvite[] = snap.docs.map((d) => {
+        const docData = d.data() as any
+        return {
+          id: d.id,
+          lobbyId: docData.lobbyId,
+          fromUid: docData.fromUid,
+          fromUsername: docData.fromUsername,
+          role: (docData.role ?? 'player2') as 'player2' | 'spectator',
+          status: docData.status ?? 'pending',
+        }
+      })
+      setLobbyInvites(data)
+    })
+
     return () => {
       unsubFriends()
       unsubRequests()
+      unsubLobbyInvites()
     }
   }, [user])
 
@@ -129,6 +161,9 @@ function FriendsSidebar() {
   if (!user || !profile) return null
 
   const pendingRequests = requests.filter((r) => r.status === 'pending')
+  const pendingLobbyInvites = lobbyInvites.filter(
+    (inv) => inv.status === 'pending',
+  )
 
   // ---- Modal open/close helpers ----
 
@@ -184,7 +219,6 @@ function FriendsSidebar() {
 
     try {
       setBusy(true)
-      // Lookup friend code -> uid
       const codeRef = doc(db, 'friendCodes', raw)
       const codeSnap = await getDoc(codeRef)
 
@@ -196,7 +230,6 @@ function FriendsSidebar() {
       const data = codeSnap.data() as any
       const targetUid: string = data.uid
 
-      // Create/update friend request on the target user
       const requestRef = doc(db, 'users', targetUid, 'friendRequests', user.uid)
       await setDoc(requestRef, {
         fromUid: user.uid,
@@ -216,7 +249,10 @@ function FriendsSidebar() {
     }
   }
 
-  const handleRespondToRequest = async (request: FriendRequest, accept: boolean) => {
+  const handleRespondToRequest = async (
+    request: FriendRequest,
+    accept: boolean,
+  ) => {
     if (!user || !profile) return
     setBusy(true)
     setError(null)
@@ -231,7 +267,6 @@ function FriendsSidebar() {
       )
 
       if (accept) {
-        // Add to both friend lists
         const myFriendRef = doc(db, 'users', user.uid, 'friends', request.fromUid)
         const theirFriendRef = doc(
           db,
@@ -279,6 +314,68 @@ function FriendsSidebar() {
     }
   }
 
+  // ---- Lobby invite accept/decline (receiving side) ----
+
+  const handleRespondToLobbyInvite = async (
+    invite: LobbyInvite,
+    accept: boolean,
+  ) => {
+    if (!user || !profile) return
+    setBusy(true)
+    setError(null)
+
+    try {
+      const inviteRef = doc(
+        db,
+        'users',
+        user.uid,
+        'lobbyInvites',
+        invite.id,
+      )
+
+      if (accept) {
+        const lobbyRef = doc(db, 'lobbies', invite.lobbyId)
+
+        if (invite.role === 'player2') {
+          await updateDoc(lobbyRef, {
+            p2: {
+              uid: user.uid,
+              username: profile.username,
+            },
+            updatedAt: serverTimestamp(),
+          })
+        } else {
+          await updateDoc(lobbyRef, {
+            spectators: arrayUnion({
+              uid: user.uid,
+              username: profile.username,
+            }),
+            updatedAt: serverTimestamp(),
+          })
+        }
+
+        await setDoc(
+          inviteRef,
+          { status: 'accepted' },
+          { merge: true },
+        )
+
+        navigate(`/play/private/${invite.lobbyId}`)
+      } else {
+        await setDoc(
+          inviteRef,
+          { status: 'declined' },
+          { merge: true },
+        )
+      }
+    } catch (err) {
+      console.error(err)
+      setError('Failed to respond to game invite.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   // ---- Status pill renderer ----
 
   const renderStatusPill = (friendUid: string) => {
@@ -319,60 +416,100 @@ function FriendsSidebar() {
 
   return (
     <>
-      {/* Sidebar with collapsible width */}
       <aside
-        className={`relative border-l border-slate-900 bg-slate-950/98 backdrop-blur-sm shadow-2xl flex flex-col transition-[width] duration-200 ${
+        className={`relative flex flex-col border-l border-slate-900 bg-slate-950/98 shadow-2xl backdrop-blur-sm transition-[width] duration-200 ${
           collapsed ? 'w-16' : 'w-64'
         }`}
       >
-        {/* Toggle tab on the left edge */}
+        {/* Toggle tab */}
         <button
           type="button"
           onClick={() => setCollapsed((prev) => !prev)}
-          className="absolute top-1/2 left-0 z-10 flex h-10 w-6 -translate-y-1/2 -translate-x-full items-center justify-center rounded-l-full rounded-r-none border border-slate-800 bg-slate-900/90 text-xs text-slate-300 shadow-lg hover:border-amber-400 hover:text-amber-300"
+          className="absolute left-0 top-1/2 z-10 flex h-10 w-6 -translate-x-full -translate-y-1/2 items-center justify-center rounded-l-full rounded-r-none border border-slate-800 bg-slate-900/90 text-xs text-slate-300 shadow-lg hover:border-amber-400 hover:text-amber-300"
           aria-label={collapsed ? 'Open friends list' : 'Close friends list'}
         >
           {collapsed ? '‹' : '›'}
         </button>
 
-        {/* Profile header inside sidebar – shares height + border with navbar */}
+        {/* Profile header */}
         <div className="rb-sidebar-profile-header">
           <Link
             to="/profile"
-            className={`flex items-center gap-3 group cursor-pointer ${
+            className={`group flex cursor-pointer items-center gap-3 ${
               collapsed ? 'justify-center' : ''
             }`}
           >
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-amber-500 text-slate-950 text-sm font-bold">
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-amber-500 text-sm font-bold text-slate-950">
               {profile.username.charAt(0).toUpperCase()}
             </div>
             <div className={`min-w-0 ${collapsed ? 'hidden' : 'block'}`}>
               <div className="truncate text-sm font-semibold text-amber-200 group-hover:text-amber-100">
                 {profile.username}
               </div>
-              <div className="text-[11px] text-slate-400 font-mono group-hover:text-amber-300">
+              <div className="font-mono text-[11px] text-slate-400 group-hover:text-amber-300">
                 {profile.friendCode}
               </div>
             </div>
           </Link>
         </div>
 
-        {/* Friends header + list only when expanded */}
+        {/* Incoming game invites (top area) */}
+        {!collapsed && pendingLobbyInvites.length > 0 && (
+          <div className="space-y-2 border-b border-slate-800 px-3 py-2">
+            {pendingLobbyInvites.map((inv) => (
+              <div
+                key={inv.id}
+                className="flex items-center justify-between gap-2 rounded-lg bg-slate-900/80 px-2 py-2"
+              >
+                <div className="min-w-0">
+                  <div className="truncate text-xs font-semibold text-amber-200">
+                    {inv.fromUsername}
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    {inv.role === 'player2'
+                      ? 'invited you to a private match'
+                      : 'invited you to spectate a match'}
+                  </div>
+                </div>
+                <div className="flex flex-shrink-0 gap-1">
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => handleRespondToLobbyInvite(inv, true)}
+                    className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500 text-xs font-bold text-slate-950 hover:bg-emerald-400 disabled:opacity-60"
+                    title="Accept"
+                  >
+                    ✓
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => handleRespondToLobbyInvite(inv, false)}
+                    className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-700 text-xs font-bold text-slate-100 hover:bg-slate-600 disabled:opacity-60"
+                    title="Decline"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Friends header + list */}
         {!collapsed && (
           <>
-            {/* Friends header */}
-            <div className="flex items-center justify-between px-3 py-3 border-b border-slate-800">
+            <div className="flex items-center justify-between border-b border-slate-800 px-3 py-3">
               <div className="text-sm font-semibold uppercase tracking-wide text-slate-300">
                 Friends
               </div>
               <div className="flex items-center gap-2">
-                {/* Notifications icon */}
                 <button
                   type="button"
                   onClick={handleOpenRequestsModal}
-                  className={`relative h-7 w-7 rounded-full border border-slate-700 bg-slate-900/80 flex items-center justify-center text-slate-300 hover:border-amber-400 hover:text-amber-300 ${
+                  className={`relative flex h-7 w-7 items-center justify-center rounded-full border border-slate-700 bg-slate-900/80 text-slate-300 hover:border-amber-400 hover:text-amber-300 ${
                     pendingRequests.length > 0
-                      ? 'after:absolute after:-top-0.5 after:-right-0.5 after:h-2 after:w-2 after:rounded-full after:bg-amber-400'
+                      ? 'after:absolute after:-right-0.5 after:-top-0.5 after:h-2 after:w-2 after:rounded-full after:bg-amber-400'
                       : ''
                   }`}
                   title="Friend requests"
@@ -380,11 +517,10 @@ function FriendsSidebar() {
                   <span className="text-[13px]">!</span>
                 </button>
 
-                {/* Add friend icon */}
                 <button
                   type="button"
                   onClick={handleOpenAddModal}
-                  className="h-7 w-7 rounded-full border border-slate-700 bg-slate-900/80 flex items-center justify-center text-slate-300 hover:border-amber-400 hover:text-amber-300"
+                  className="flex h-7 w-7 items-center justify-center rounded-full border border-slate-700 bg-slate-900/80 text-slate-300 hover:border-amber-400 hover:text-amber-300"
                   title="Add friend"
                 >
                   <span className="text-lg leading-none">+</span>
@@ -399,20 +535,20 @@ function FriendsSidebar() {
                   No friends yet. Use the + icon to add someone by friend code.
                 </div>
               ) : (
-                <ul className="text-sm divide-y divide-slate-900/80">
+                <ul className="divide-y divide-slate-900/80 text-sm">
                   {friends.map((f) => (
                     <li
                       key={f.uid}
-                      className="flex items-center gap-3 px-3 py-2 hover:bg-slate-900/70 cursor-default"
+                      className="flex items-center gap-3 px-3 py-2 cursor-default hover:bg-slate-900/70"
                     >
                       <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-800 text-[11px] font-bold text-amber-300">
                         {f.username.charAt(0).toUpperCase()}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-slate-100 text-sm">
+                        <div className="truncate text-sm text-slate-100">
                           {f.username}
                         </div>
-                        <div className="text-xs text-slate-500 font-mono">
+                        <div className="font-mono text-xs text-slate-500">
                           {f.friendCode}
                         </div>
                       </div>
@@ -433,15 +569,15 @@ function FriendsSidebar() {
             <button
               type="button"
               onClick={handleCloseAddModal}
-              className="absolute right-3 top-3 text-slate-400 hover:text-slate-100 text-sm"
+              className="absolute right-3 top-3 text-sm text-slate-400 hover:text-slate-100"
               aria-label="Close"
             >
               ×
             </button>
-            <h2 className="text-lg font-semibold text-amber-200 mb-2">
+            <h2 className="mb-2 text-lg font-semibold text-amber-200">
               Add Friend
             </h2>
-            <p className="text-xs text-slate-300 mb-3">
+            <p className="mb-3 text-xs text-slate-300">
               Enter your friend&apos;s 5-character friend code.
             </p>
 
@@ -450,7 +586,7 @@ function FriendsSidebar() {
               value={friendCodeInput}
               onChange={(e) => setFriendCodeInput(e.target.value.toUpperCase())}
               maxLength={5}
-              className="mb-2 w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm font-mono tracking-[0.25em] text-slate-100 focus:border-amber-500 focus:outline-none text-center"
+              className="mb-2 w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-center text-sm font-mono tracking-[0.25em] text-slate-100 focus:border-amber-500 focus:outline-none"
               placeholder="A1B2C"
             />
 
@@ -477,7 +613,7 @@ function FriendsSidebar() {
                 type="button"
                 disabled={busy}
                 onClick={handleSendFriendRequest}
-                className="rounded-md bg-amber-500 px-3 py-1.5 text-xs font-semibold text-slate-950 shadow hover:bg-amber-400 disabled:opacity-60 disabled:cursor-not-allowed"
+                className="rounded-md bg-amber-500 px-3 py-1.5 text-xs font-semibold text-slate-950 shadow hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {busy ? 'Sending…' : 'Add Friend'}
               </button>
@@ -493,18 +629,18 @@ function FriendsSidebar() {
             <button
               type="button"
               onClick={handleCloseRequestsModal}
-              className="absolute right-3 top-3 text-slate-400 hover:text-slate-100 text-sm"
+              className="absolute right-3 top-3 text-sm text-slate-400 hover:text-slate-100"
               aria-label="Close"
             >
               ×
             </button>
 
-            <h2 className="text-lg font-semibold text-amber-200 mb-2">
+            <h2 className="mb-2 text-lg font-semibold text-amber-200">
               Friend Requests
             </h2>
 
             {pendingRequests.length === 0 ? (
-              <p className="text-xs text-slate-300 mb-4">
+              <p className="mb-4 text-xs text-slate-300">
                 You have no pending friend requests.
               </p>
             ) : (
@@ -517,7 +653,7 @@ function FriendsSidebar() {
                     <div className="text-sm text-slate-100">
                       {req.fromUsername}
                     </div>
-                    <div className="text-[11px] text-slate-400 font-mono mb-2">
+                    <div className="mb-2 font-mono text-[11px] text-slate-400">
                       {req.fromFriendCode}
                     </div>
                     <div className="flex justify-end gap-2">
@@ -525,7 +661,7 @@ function FriendsSidebar() {
                         type="button"
                         disabled={busy}
                         onClick={() => handleRespondToRequest(req, true)}
-                        className="rounded-md bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-60 disabled:cursor-not-allowed"
+                        className="rounded-md bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         Accept
                       </button>
@@ -533,7 +669,7 @@ function FriendsSidebar() {
                         type="button"
                         disabled={busy}
                         onClick={() => handleRespondToRequest(req, false)}
-                        className="rounded-md bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-100 hover:bg-slate-700 disabled:opacity-60"
+                        className="rounded-md bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-100 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         Decline
                       </button>

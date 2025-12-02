@@ -7,6 +7,7 @@ import DecksPage from './pages/DecksPage'
 import RulesPage from './pages/RulesPage'
 import ProfilePage from './pages/ProfilePage'
 import FriendsSidebar from './components/friends/FriendsSidebar'
+import PrivateMatchLobbyPage from './pages/PrivateMatchLobbyPage'
 import { useAuth } from './contexts/AuthContext'
 
 function App() {
@@ -15,9 +16,9 @@ function App() {
   return (
     <BrowserRouter>
       {/* Root layout: main content on the left, friends sidebar on the right */}
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex">
+      <div className="flex min-h-screen bg-slate-950 text-slate-100">
         {/* Left side: navbar + page content */}
-        <div className="flex flex-col flex-1 min-w-0">
+        <div className="flex min-w-0 flex-1 flex-col">
           <Navbar />
 
           <main className="flex-1">
@@ -25,6 +26,10 @@ function App() {
               <Routes>
                 <Route path="/" element={<HomePage />} />
                 <Route path="/play" element={<PlayPage />} />
+                <Route
+                  path="/play/private/:lobbyId"
+                  element={<PrivateMatchLobbyPage />}
+                />
                 <Route path="/decks" element={<DecksPage />} />
                 <Route path="/rules" element={<RulesPage />} />
                 <Route path="/profile" element={<ProfilePage />} />
@@ -34,7 +39,7 @@ function App() {
           </main>
         </div>
 
-        {/* Right side: friends sidebar (always visible when logged in) */}
+        {/* Right side: friends sidebar (visible when logged in) */}
         {user && <FriendsSidebar />}
       </div>
     </BrowserRouter>
@@ -42,3 +47,4 @@ function App() {
 }
 
 export default App
+
