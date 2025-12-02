@@ -1,4 +1,3 @@
-// src/pages/PlayPage.tsx
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore'
@@ -37,6 +36,15 @@ function PlayPage() {
         },
         p2: null,
         spectators: [],
+        // Default rules: best of 1, sideboard disabled
+        rules: {
+          bestOf: 1,
+          sideboard: false,
+        },
+        // Must be explicitly confirmed by Player 1 before game can start
+        rulesConfirmed: false,
+        p1Ready: false,
+        p2Ready: false,
       })
 
       navigate(`/play/private/${lobbyDoc.id}`)

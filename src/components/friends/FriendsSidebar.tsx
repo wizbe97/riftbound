@@ -4,14 +4,13 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext'
 import { db } from '../../firebase'
 import {
-  arrayUnion,
   collection,
   doc,
   getDoc,
   onSnapshot,
+  runTransaction,
   serverTimestamp,
   setDoc,
-  updateDoc,
   type Timestamp,
 } from 'firebase/firestore'
 
@@ -336,23 +335,52 @@ function FriendsSidebar() {
       if (accept) {
         const lobbyRef = doc(db, 'lobbies', invite.lobbyId)
 
-        if (invite.role === 'player2') {
-          await updateDoc(lobbyRef, {
-            p2: {
-              uid: user.uid,
-              username: profile.username,
-            },
+        // Seat selection rules for "opponent" invites:
+        // - If P1 is free, join as P1
+        // - Else if P2 is free, join as P2
+        // - Else join as spectator
+        await runTransaction(db, async (tx) => {
+          const snap = await tx.get(lobbyRef)
+          if (!snap.exists()) {
+            throw new Error('lobby-not-found')
+          }
+
+          const data = snap.data() as any
+          let p1 = data.p1 ?? null
+          let p2 = data.p2 ?? null
+          let spectators: any[] = Array.isArray(data.spectators)
+            ? data.spectators
+            : []
+
+          const alreadyP1 = p1 && p1.uid === user.uid
+          const alreadyP2 = p2 && p2.uid === user.uid
+          const alreadySpectator = spectators.some(
+            (s: any) => s.uid === user.uid,
+          )
+
+          // If user is already in the lobby somewhere, don't reshuffle them
+          if (!alreadyP1 && !alreadyP2 && !alreadySpectator) {
+            if (invite.role === 'player2') {
+              if (!p1) {
+                p1 = { uid: user.uid, username: profile.username }
+              } else if (!p2) {
+                p2 = { uid: user.uid, username: profile.username }
+              } else {
+                spectators.push({ uid: user.uid, username: profile.username })
+              }
+            } else {
+              // Spectator invite
+              spectators.push({ uid: user.uid, username: profile.username })
+            }
+          }
+
+          tx.update(lobbyRef, {
+            p1,
+            p2,
+            spectators,
             updatedAt: serverTimestamp(),
           })
-        } else {
-          await updateDoc(lobbyRef, {
-            spectators: arrayUnion({
-              uid: user.uid,
-              username: profile.username,
-            }),
-            updatedAt: serverTimestamp(),
-          })
-        }
+        })
 
         await setDoc(
           inviteRef,

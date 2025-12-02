@@ -1,3 +1,4 @@
+// src/contexts/LobbyContext.tsx
 import {
   createContext,
   useContext,

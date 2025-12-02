@@ -1,17 +1,23 @@
-import { useEffect, useMemo, useState } from 'react'
+// src/pages/PrivateMatchLobbyPage.tsx
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   collection,
   doc,
+  limit,
   onSnapshot,
+  orderBy,
+  query,
   serverTimestamp,
   setDoc,
   type DocumentData,
+  type Timestamp,
+  updateDoc,
 } from 'firebase/firestore'
 import { db } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
 import { useLobbySession } from '../contexts/LobbyContext'
-import { leaveLobbyForUser } from '../utils/lobby'
+import { changeLobbySeat, leaveLobbyForUser } from '../utils/lobby'
 
 type LobbyPlayer = {
   uid: string
@@ -23,6 +29,11 @@ type LobbySpectator = {
   username: string
 }
 
+type LobbyRules = {
+  bestOf: 1 | 3
+  sideboard: boolean
+}
+
 type Lobby = {
   id: string
   hostUid: string
@@ -32,6 +43,9 @@ type Lobby = {
   p1: LobbyPlayer | null
   p2: LobbyPlayer | null
   spectators: LobbySpectator[]
+  p1Ready: boolean
+  p2Ready: boolean
+  rules: LobbyRules
 }
 
 type Friend = {
@@ -40,7 +54,23 @@ type Friend = {
   friendCode: string
 }
 
+type ChatMessage = {
+  id: string
+  uid: string
+  username: string
+  role: 'p1' | 'p2' | 'spectator'
+  text: string
+  createdAt?: Timestamp
+  system?: boolean
+}
+
 function mapLobby(id: string, data: DocumentData): Lobby {
+  const rawRules = (data.rules ?? {}) as Partial<LobbyRules>
+  const rules: LobbyRules = {
+    bestOf: rawRules.bestOf === 3 ? 3 : 1, // default best-of-1
+    sideboard: !!rawRules.sideboard, // default disabled
+  }
+
   return {
     id,
     hostUid: data.hostUid,
@@ -50,6 +80,9 @@ function mapLobby(id: string, data: DocumentData): Lobby {
     p1: data.p1 ?? null,
     p2: data.p2 ?? null,
     spectators: data.spectators ?? [],
+    p1Ready: !!data.p1Ready,
+    p2Ready: !!data.p2Ready,
+    rules,
   }
 }
 
@@ -61,6 +94,9 @@ function PrivateMatchLobbyPage() {
 
   const [lobby, setLobby] = useState<Lobby | null>(null)
   const [loadingLobby, setLoadingLobby] = useState(true)
+
+  // Seat / leave errors
+  const [seatError, setSeatError] = useState<string | null>(null)
 
   // Invite modal state
   const [inviteModalOpen, setInviteModalOpen] = useState(false)
@@ -88,6 +124,16 @@ function PrivateMatchLobbyPage() {
     {},
   )
 
+  // Chat
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
+  const [chatInput, setChatInput] = useState('')
+  const [chatSending, setChatSending] = useState(false)
+  const [chatError, setChatError] = useState<string | null>(null)
+  const chatScrollRef = useRef<HTMLDivElement | null>(null)
+
+  // Track previous member UIDs so we can detect who just joined
+  const prevMemberUidsRef = useRef<Set<string>>(new Set())
+
   // Subscribe to lobby doc
   useEffect(() => {
     if (!lobbyId) return
@@ -107,6 +153,7 @@ function PrivateMatchLobbyPage() {
         const mapped = mapLobby(snap.id, snap.data())
         setLobby(mapped)
         setLoadingLobby(false)
+        setSeatError(null)
         setActiveLobbyId(snap.id)
       },
       (err) => {
@@ -118,11 +165,52 @@ function PrivateMatchLobbyPage() {
     return () => unsub()
   }, [lobbyId, navigate, setActiveLobbyId])
 
+  // Subscribe to chat messages
+  useEffect(() => {
+    if (!lobbyId) return
+
+    const messagesRef = collection(db, 'lobbies', lobbyId, 'chat')
+    const q = query(messagesRef, orderBy('createdAt', 'asc'), limit(200))
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const msgs: ChatMessage[] = snap.docs.map((d) => {
+          const data = d.data() as any
+          return {
+            id: d.id,
+            uid: data.uid,
+            username: data.username,
+            role: data.role ?? 'spectator',
+            text: data.text,
+            createdAt: data.createdAt,
+            system: !!data.system,
+          }
+        })
+        setChatMessages(msgs)
+      },
+      (err) => {
+        console.error('[PrivateMatchLobby] Failed to subscribe to chat', err)
+      },
+    )
+
+    return () => unsub()
+  }, [lobbyId])
+
+  // Auto-scroll chat to the latest message
+  useEffect(() => {
+    const el = chatScrollRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  }, [chatMessages.length])
+
   // If we’re no longer a member of the lobby, kick back to Play
+  // BUT: the host is always considered a member even if they temporarily lose their seat.
   useEffect(() => {
     if (!lobby || !user) return
 
     const isMember =
+      lobby.hostUid === user.uid ||
       (lobby.p1 && lobby.p1.uid === user.uid) ||
       (lobby.p2 && lobby.p2.uid === user.uid) ||
       lobby.spectators.some((s) => s.uid === user.uid)
@@ -140,8 +228,23 @@ function PrivateMatchLobbyPage() {
     user && lobby?.spectators.some((s) => s.uid === user.uid)
   )
 
+  // Player who currently sits in P1 controls the rules AND can start the game
+  const canEditRules = isP1
+
+  const currentRole: 'p1' | 'p2' | 'spectator' | 'none' = useMemo(() => {
+    if (!user || !lobby) return 'none'
+    if (lobby.p1 && lobby.p1.uid === user.uid) return 'p1'
+    if (lobby.p2 && lobby.p2.uid === user.uid) return 'p2'
+    if (lobby.spectators.some((s) => s.uid === user.uid)) return 'spectator'
+    return 'none'
+  }, [user, lobby])
+
   // Spectator invite rules: both players and spectators can invite spectators
   const canInviteSpectators = !!(isP1 || isP2 || isSpectator)
+
+  // Player invites (opponent slot) – any player can invite while at least one player slot is free
+  const hasOpenPlayerSlot = !!lobby && (!lobby.p1 || !lobby.p2)
+  const canInviteOpponent = !!(user && (isP1 || isP2) && hasOpenPlayerSlot)
 
   const handleBackClick = () => {
     if (!lobby || !user) {
@@ -149,14 +252,11 @@ function PrivateMatchLobbyPage() {
       return
     }
 
-    const isMember =
-      isP1 || isP2 || isSpectator
-
+    const isMember = isP1 || isP2 || isSpectator
     if (!isMember) {
       navigate('/play')
       return
     }
-
     setShowLeaveModal(true)
   }
 
@@ -282,18 +382,81 @@ function PrivateMatchLobbyPage() {
       if (status !== 'offline') return
       if (uid === user.uid) return // self handled elsewhere
 
-      // Remove offline member
       void leaveLobbyForUser(lobby.id, uid).catch((err) =>
         console.error('[PrivateMatchLobby] Failed to clean offline member', err),
       )
     })
   }, [memberStatuses, isHost, lobby, user])
 
+  // Detect newly joined members and write a system chat message (host only)
+  useEffect(() => {
+    if (!lobby || !user) return
+    if (user.uid !== lobby.hostUid) return // only host writes system messages
+
+    const currentMembers: { uid: string; username: string }[] = []
+    if (lobby.p1)
+      currentMembers.push({ uid: lobby.p1.uid, username: lobby.p1.username })
+    if (lobby.p2)
+      currentMembers.push({ uid: lobby.p2.uid, username: lobby.p2.username })
+    lobby.spectators.forEach((s) =>
+      currentMembers.push({ uid: s.uid, username: s.username }),
+    )
+
+    const prevSet = prevMemberUidsRef.current
+    const currentSet = new Set(currentMembers.map((m) => m.uid))
+
+    const newMembers = currentMembers.filter((m) => !prevSet.has(m.uid))
+
+    if (newMembers.length > 0) {
+      const messagesRef = collection(db, 'lobbies', lobby.id, 'chat')
+      newMembers.forEach(async (m) => {
+        try {
+          const messageRef = doc(messagesRef)
+          await setDoc(messageRef, {
+            uid: m.uid,
+            username: m.username,
+            role: 'spectator', // role label isn’t shown on system messages
+            text: `${m.username} joined the lobby.`,
+            system: true,
+            createdAt: serverTimestamp(),
+          })
+        } catch (err) {
+          console.error('[PrivateMatchLobby] failed to write join message', err)
+        }
+      })
+    }
+
+    prevMemberUidsRef.current = currentSet
+  }, [lobby, user])
+
+  // ---- Seat changing ----
+
+  const handleJoinSeat = async (seat: 'p1' | 'p2' | 'spectator') => {
+    if (!user || !profile || !lobby) return
+    setSeatError(null)
+
+    try {
+      await changeLobbySeat(lobby.id, user.uid, profile.username, seat)
+      // Join messages are now handled centrally in the membership-diff effect above
+    } catch (err: any) {
+      console.error('[PrivateMatchLobby] changeLobbySeat failed', err)
+      const msg =
+        err?.message === 'seat-p1-taken'
+          ? 'Player 1 slot has already been taken.'
+          : err?.message === 'seat-p2-taken'
+          ? 'Player 2 slot has already been taken.'
+          : 'Failed to change seat. Please try again.'
+      setSeatError(msg)
+    }
+  }
+
+  // ---- Invite modal helpers ----
+
   const openInviteModal = (role: 'player2' | 'spectator') => {
     if (!user || !profile || !lobby) return
 
-    // Only host can invite P2
-    if (role === 'player2' && !isP1) return
+    // Player invites only allowed while a player slot is free
+    if (role === 'player2' && !canInviteOpponent) return
 
     setInviteRole(role)
     setInviteModalOpen(true)
@@ -357,6 +520,7 @@ function PrivateMatchLobbyPage() {
             lobbyId: lobby.id,
             fromUid: user.uid,
             fromUsername: profile.username,
+            // 'player2' here means "join as an opponent player slot", your accept logic decides P1/P2
             role: inviteRole,
             status: 'pending',
             createdAt: serverTimestamp(),
@@ -374,6 +538,137 @@ function PrivateMatchLobbyPage() {
     } finally {
       setSendingInvites(false)
     }
+  }
+
+  // ---- Ready states ----
+
+  const handleToggleReady = async (slot: 'p1' | 'p2') => {
+    if (!user || !lobby) return
+
+    const isSlotUser =
+      (slot === 'p1' && lobby.p1 && lobby.p1.uid === user.uid) ||
+      (slot === 'p2' && lobby.p2 && lobby.p2.uid === user.uid)
+
+    if (!isSlotUser) return
+
+    const lobbyRef = doc(db, 'lobbies', lobby.id)
+    const field = slot === 'p1' ? 'p1Ready' : 'p2Ready'
+    const current = slot === 'p1' ? lobby.p1Ready : lobby.p2Ready
+
+    try {
+      await updateDoc(lobbyRef, {
+        [field]: !current,
+        updatedAt: serverTimestamp(),
+      })
+    } catch (err) {
+      console.error('[PrivateMatchLobby] toggle ready failed', err)
+    }
+  }
+
+  // Only Player 1 can start; rules are defaulted, so we just care about ready states
+  const canStartGame =
+    !!lobby &&
+    isP1 &&
+    lobby.p1 &&
+    lobby.p2 &&
+    lobby.p1Ready &&
+    lobby.p2Ready
+
+  const handleStartGame = async () => {
+    if (!lobby || !isP1) return
+    if (!canStartGame) return
+
+    try {
+      const lobbyRef = doc(db, 'lobbies', lobby.id)
+      await updateDoc(lobbyRef, {
+        status: 'in-game',
+        updatedAt: serverTimestamp(),
+      })
+      // Placeholder – later we’ll navigate into the actual match
+      console.log('Start game clicked with rules:', lobby.rules)
+    } catch (err) {
+      console.error('[PrivateMatchLobby] failed to mark lobby in-game', err)
+    }
+  }
+
+  // ---- Game rules (P1 controls) ----
+
+  const handleBestOfChange = async (bestOf: 1 | 3) => {
+    if (!lobby || !canEditRules) return
+
+    const lobbyRef = doc(db, 'lobbies', lobby.id)
+    try {
+      await updateDoc(lobbyRef, {
+        'rules.bestOf': bestOf,
+        updatedAt: serverTimestamp(),
+      })
+    } catch (err) {
+      console.error('[PrivateMatchLobby] update bestOf failed', err)
+    }
+  }
+
+  const handleSideboardChange = async (checked: boolean) => {
+    if (!lobby || !canEditRules) return
+
+    const lobbyRef = doc(db, 'lobbies', lobby.id)
+    try {
+      await updateDoc(lobbyRef, {
+        'rules.sideboard': checked,
+        updatedAt: serverTimestamp(),
+      })
+    } catch (err) {
+      console.error('[PrivateMatchLobby] update sideboard failed', err)
+    }
+  }
+
+  // ---- Chat ----
+
+  const handleSendChat = async () => {
+    if (!user || !profile || !lobby) return
+    const text = chatInput.trim()
+    if (!text) return
+
+    // Must be part of lobby
+    if (currentRole === 'none') {
+      setChatError('You must be in the lobby to chat.')
+      return
+    }
+
+    setChatError(null)
+    setChatSending(true)
+    try {
+      const messagesRef = collection(db, 'lobbies', lobby.id, 'chat')
+      const messageRef = doc(messagesRef)
+      await setDoc(messageRef, {
+        uid: user.uid,
+        username: profile.username,
+        role: currentRole, // guaranteed 'p1' | 'p2' | 'spectator'
+        text,
+        system: false,
+        createdAt: serverTimestamp(),
+      })
+      setChatInput('')
+    } catch (err) {
+      console.error('[PrivateMatchLobby] send chat failed', err)
+      setChatError('Failed to send message.')
+    } finally {
+      setChatSending(false)
+    }
+  }
+
+  const handleChatKeyDown: React.KeyboardEventHandler<HTMLInputElement> = (
+    e,
+  ) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      void handleSendChat()
+    }
+  }
+
+  const roleLabel = (msgRole: 'p1' | 'p2' | 'spectator') => {
+    if (msgRole === 'p1') return 'P1'
+    if (msgRole === 'p2') return 'P2'
+    return 'Spec'
   }
 
   // ---------- Render ----------
@@ -455,36 +750,94 @@ function PrivateMatchLobbyPage() {
           </div>
         </div>
 
+        {seatError && (
+          <div className="rounded border border-red-500/60 bg-red-950/60 px-3 py-2 text-xs text-red-200">
+            {seatError}
+          </div>
+        )}
+
         {/* Player slots */}
         <div className="grid gap-4 md:grid-cols-2">
           {/* P1 */}
           <div className="flex flex-col rounded-xl border border-amber-500/40 bg-slate-900/70 p-4 shadow-md">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-300">
-              Player 1 (Host)
-            </div>
-            <div className="flex flex-1 items-center justify-center">
-              <div className="flex flex-col items-center gap-2">
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-amber-500 text-2xl font-bold text-slate-950">
-                  {lobby.p1?.username.charAt(0).toUpperCase()}
-                </div>
-                <div className="text-sm font-semibold text-slate-100">
-                  {lobby.p1?.username}
-                </div>
-                {lobby.p1?.uid === user.uid && (
-                  <div className="text-[11px] text-emerald-300">You</div>
-                )}
+            <div className="mb-2 flex items-center justify-between">
+              <div className="text-xs font-semibold uppercase tracking-wide text-amber-300">
+                Player 1
               </div>
+              {lobby.p1 && (
+                <span className="text-[11px] text-slate-400">
+                  {lobby.p1Ready ? 'Ready' : 'Not ready'}
+                </span>
+              )}
+            </div>
+
+            <div className="flex flex-1 items-center justify-center">
+              {lobby.p1 ? (
+                <div className="flex flex-col items-center gap-2">
+                  <div className="flex h-16 w-16 items-center justify-center rounded-full bg-amber-500 text-2xl font-bold text-slate-950">
+                    {lobby.p1.username.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="text-sm font-semibold text-slate-100">
+                    {lobby.p1.username}
+                  </div>
+                  {lobby.p1.uid === user.uid && (
+                    <div className="text-[11px] text-emerald-300">You</div>
+                  )}
+
+                  {isP1 && (
+                    <div className="mt-2 flex flex-wrap justify-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleReady('p1')}
+                        className={`rounded-md px-3 py-1 text-xs font-semibold shadow ${
+                          lobby.p1Ready
+                            ? 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'
+                            : 'bg-slate-800 text-slate-100 hover:bg-slate-700'
+                        }`}
+                      >
+                        Ready
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex flex-col items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => handleJoinSeat('p1')}
+                    className="flex w-full items-center justify-center rounded-lg border border-dashed border-amber-500/60 bg-slate-900/70 px-3 py-3 text-sm font-semibold text-amber-200 hover:border-amber-400 hover:bg-slate-900/90"
+                  >
+                    Join as Player 1
+                  </button>
+                  {canInviteOpponent && (
+                    <button
+                      type="button"
+                      onClick={() => openInviteModal('player2')}
+                      className="flex w-full items-center justify-center rounded-lg border border-amber-500/40 bg-slate-900/70 px-3 py-2 text-xs font-semibold text-amber-200 hover:border-amber-400 hover:bg-slate-900/90"
+                    >
+                      Invite Friends
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
           {/* P2 */}
           <div className="flex flex-col rounded-xl border border-amber-500/40 bg-slate-900/70 p-4 shadow-md">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-300">
-              Player 2
+            <div className="mb-2 flex items-center justify-between">
+              <div className="text-xs font-semibold uppercase tracking-wide text-amber-300">
+                Player 2
+              </div>
+              {lobby.p2 && (
+                <span className="text-[11px] text-slate-400">
+                  {lobby.p2Ready ? 'Ready' : 'Not ready'}
+                </span>
+              )}
             </div>
 
-            {lobby.p2 ? (
-              <div className="flex flex-1 items-center justify-center">
+            <div className="flex flex-1 items-center justify-center">
+              {lobby.p2 ? (
                 <div className="flex flex-col items-center gap-2">
                   <div className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-700 text-2xl font-bold text-amber-200">
                     {lobby.p2.username.charAt(0).toUpperCase()}
@@ -495,28 +848,199 @@ function PrivateMatchLobbyPage() {
                   {lobby.p2.uid === user.uid && (
                     <div className="text-[11px] text-emerald-300">You</div>
                   )}
+
+                  {isP2 && (
+                    <div className="mt-2 flex flex-wrap justify-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleReady('p2')}
+                        className={`rounded-md px-3 py-1 text-xs font-semibold shadow ${
+                          lobby.p2Ready
+                            ? 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'
+                            : 'bg-slate-800 text-slate-100 hover:bg-slate-700'
+                        }`}
+                      >
+                        Ready
+                      </button>
+                    </div>
+                  )}
                 </div>
-              </div>
-            ) : isP1 ? (
-              <button
-                type="button"
-                onClick={() => openInviteModal('player2')}
-                className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-amber-500/50 bg-slate-900/50 hover:border-amber-400 hover:bg-slate-900/80"
-              >
-                <div className="flex flex-col items-center gap-2">
-                  <span className="text-4xl leading-none text-amber-300">
-                    +
-                  </span>
-                  <span className="text-sm font-semibold text-amber-200">
-                    Invite Friends
-                  </span>
+              ) : (
+                <div className="flex flex-col items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => handleJoinSeat('p2')}
+                    className="flex w-full items-center justify-center rounded-lg border border-dashed border-amber-500/60 bg-slate-900/70 px-3 py-3 text-sm font-semibold text-amber-200 hover:border-amber-400 hover:bg-slate-900/90"
+                  >
+                    Join as Player 2
+                  </button>
+                  {canInviteOpponent && (
+                    <button
+                      type="button"
+                      onClick={() => openInviteModal('player2')}
+                      className="flex w-full items-center justify-center rounded-lg border border-amber-500/40 bg-slate-900/70 px-3 py-2 text-xs font-semibold text-amber-200 hover:border-amber-400 hover:bg-slate-900/90"
+                    >
+                      Invite Friends
+                    </button>
+                  )}
                 </div>
-              </button>
-            ) : (
-              <div className="flex flex-1 items-center justify-center text-xs text-slate-400">
-                Waiting for the host to invite a player.
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Chat + Start Game / Rules row */}
+        <div className="flex flex-col gap-4 md:flex-row">
+          {/* Chat box */}
+          <div className="flex flex-1 flex-col rounded-xl border border-amber-500/40 bg-slate-900/70 p-4 shadow-md">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-300">
+              Lobby Chat
+            </div>
+
+            <div
+              ref={chatScrollRef}
+              className="mb-3 h-40 overflow-y-auto rounded-md border border-slate-800 bg-slate-950/70 px-3 py-2 text-sm"
+            >
+              {chatMessages.length === 0 ? (
+                <div className="text-xs text-slate-500">
+                  No messages yet. Say hello!
+                </div>
+              ) : (
+                <ul className="space-y-1">
+                  {chatMessages.map((m) => (
+                    <li key={m.id}>
+                      {m.system ? (
+                        <span className="text-xs italic text-slate-400">
+                          {m.text}
+                        </span>
+                      ) : (
+                        <>
+                          <span className="font-semibold text-amber-200">
+                            {m.username}
+                          </span>
+                          <span className="text-[10px] text-slate-400">
+                            {' '}
+                            [{roleLabel(m.role)}]
+                          </span>
+                          <span className="text-amber-100">: </span>
+                          <span className="text-slate-100">{m.text}</span>
+                        </>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            {chatError && (
+              <div className="mb-2 rounded border border-red-500/60 bg-red-950/60 px-2 py-1 text-[11px] text-red-200">
+                {chatError}
               </div>
             )}
+
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={handleChatKeyDown}
+                placeholder="Type a message..."
+                className="flex-1 rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 focus:border-amber-500 focus:outline-none"
+              />
+              <button
+                type="button"
+                disabled={chatSending || !chatInput.trim() || currentRole === 'none'}
+                onClick={handleSendChat}
+                className="inline-flex items-center justify-center rounded-md bg-amber-500 px-3 py-2 text-xs font-semibold text-slate-950 shadow hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Send
+              </button>
+            </div>
+          </div>
+
+          {/* Start game + rules column */}
+          <div className="flex w-full flex-col gap-3 md:w-64 lg:w-80">
+            <div className="rounded-xl border border-amber-500/40 bg-slate-900/70 p-4 shadow-md">
+              <button
+                type="button"
+                disabled={!canStartGame}
+                onClick={handleStartGame}
+                className={`inline-flex w-full items-center justify-center rounded-md px-4 py-2 text-sm font-semibold shadow ${
+                  canStartGame
+                    ? 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'
+                    : 'cursor-not-allowed bg-slate-800 text-slate-500'
+                }`}
+              >
+                Start Game
+              </button>
+              <p className="mt-2 text-[11px] text-slate-400">
+                Only Player 1 can start the game. Both players must be ready.
+              </p>
+            </div>
+
+            <div className="flex-1 rounded-xl border border-amber-500/40 bg-slate-900/70 p-4 shadow-md">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-300">
+                Game Rules
+              </div>
+
+              <div className="space-y-3 text-sm text-slate-100">
+                {/* Best of */}
+                <div>
+                  <div className="mb-1 text-xs font-semibold text-slate-300">
+                    Best of:
+                  </div>
+                  <div className="flex gap-3 text-xs">
+                    <label className="inline-flex items-center gap-1">
+                      <input
+                        type="radio"
+                        name="bestOf"
+                        checked={lobby.rules.bestOf === 1}
+                        onChange={() => handleBestOfChange(1)}
+                        disabled={!canEditRules}
+                        className="h-3 w-3 accent-amber-500"
+                      />
+                      <span>1</span>
+                    </label>
+                    <label className="inline-flex items-center gap-1">
+                      <input
+                        type="radio"
+                        name="bestOf"
+                        checked={lobby.rules.bestOf === 3}
+                        onChange={() => handleBestOfChange(3)}
+                        disabled={!canEditRules}
+                        className="h-3 w-3 accent-amber-500"
+                      />
+                      <span>3</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Sideboard */}
+                <div>
+                  <div className="mb-1 text-xs font-semibold text-slate-300">
+                    Sideboard?
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={lobby.rules.sideboard}
+                      onChange={(e) =>
+                        handleSideboardChange(e.target.checked)
+                      }
+                      disabled={!canEditRules}
+                      className="h-3 w-3 accent-amber-500"
+                    />
+                    <span>Allow sideboard</span>
+                  </label>
+                </div>
+
+                {!canEditRules && (
+                  <p className="text-[10px] text-slate-500">
+                    Only Player 1 can change these rules.
+                  </p>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -538,6 +1062,18 @@ function PrivateMatchLobbyPage() {
             )}
           </div>
 
+          {!isSpectator && (
+            <div className="mb-3">
+              <button
+                type="button"
+                onClick={() => handleJoinSeat('spectator')}
+                className="rounded-md bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-100 hover:bg-slate-700"
+              >
+                Join as Spectator
+              </button>
+            </div>
+          )}
+
           {lobby.spectators.length === 0 ? (
             <div className="rounded border border-dashed border-slate-700 px-3 py-4 text-sm text-slate-400">
               No spectators yet.
@@ -545,8 +1081,18 @@ function PrivateMatchLobbyPage() {
           ) : (
             <ul className="space-y-1 text-sm text-slate-100">
               {lobby.spectators.map((s) => (
-                <li key={s.uid} className="flex items-center justify-between">
-                  <span>{s.username}</span>
+                <li
+                  key={s.uid}
+                  className="flex items-center justify-between text-sm"
+                >
+                  <span>
+                    {s.username}
+                    {s.uid === user.uid && (
+                      <span className="ml-1 text-[11px] text-emerald-300">
+                        (You)
+                      </span>
+                    )}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -573,7 +1119,7 @@ function PrivateMatchLobbyPage() {
             </h2>
             <p className="mb-3 text-xs text-slate-300">
               {inviteRole === 'player2'
-                ? 'Select a friend to invite as Player 2.'
+                ? 'Select a friend to invite as your opponent.'
                 : 'Select one or more friends to invite as spectators.'}
             </p>
 
