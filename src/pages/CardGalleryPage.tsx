@@ -102,3 +102,4 @@ function CardGalleryPage() {
 }
 
 export default CardGalleryPage;
+

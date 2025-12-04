@@ -1,5 +1,4 @@
-// src/App.tsx
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
 import Navbar from './components/layout/Navbar';
 import HomePage from './pages/HomePage';
 import PlayPage from './pages/PlayPage';
@@ -11,52 +10,67 @@ import PrivateMatchLobbyPage from './pages/PrivateMatchLobbyPage';
 import CardGalleryPage from './pages/CardGalleryPage';
 import CreateDeckPage from './pages/CreateDeckPage';
 import DeckDetailPage from './pages/DeckDetailPage';
+import MatchGamePage from './pages/MatchGamePage';
 import { useAuth } from './contexts/AuthContext';
 
-function App() {
+function AppLayout() {
   const { user } = useAuth();
+  const location = useLocation();
+
+  const isMatchRoute =
+    location.pathname.startsWith('/play/private/') &&
+    location.pathname.endsWith('/match');
+
+  const mainWrapperClass = isMatchRoute
+    ? // Full width under navbar for the match view
+      'w-full h-full px-0 py-0'
+    : // Original centered layout for everything else
+      'mx-auto w-full max-w-6xl px-4 py-6';
 
   return (
-    <BrowserRouter>
-      {/* Root layout: main content on the left, friends sidebar on the right */}
-      <div className="flex min-h-screen bg-slate-950 text-slate-100">
-        {/* Left side: navbar + page content */}
-        <div className="flex min-w-0 flex-1 flex-col">
-          <Navbar />
-          <main className="flex-1">
-            <div className="mx-auto w-full max-w-6xl px-4 py-6">
-              <Routes>
-                <Route path="/" element={<HomePage />} />
-                <Route path="/play" element={<PlayPage />} />
-                <Route
-                  path="/play/private/:lobbyId"
-                  element={<PrivateMatchLobbyPage />}
-                />
-                <Route path="/decks" element={<DecksPage />} />
-                <Route
-                  path="/decks/create"
-                  element={<CreateDeckPage />}
-                />
-                <Route
-                  path="/decks/:deckId"
-                  element={<DeckDetailPage />}
-                />
-                <Route
-                  path="/decks/:deckId/edit"
-                  element={<CreateDeckPage />}
-                />
-                <Route path="/cards" element={<CardGalleryPage />} />
-                <Route path="/rules" element={<RulesPage />} />
-                <Route path="/profile" element={<ProfilePage />} />
-                {/* TODO: 404 page later */}
-              </Routes>
-            </div>
-          </main>
-        </div>
-
-        {/* Right side: friends sidebar (visible when logged in) */}
-        {user && <FriendsSidebar />}
+    <div className="flex min-h-screen bg-slate-950 text-slate-100">
+      {/* Left side: navbar + page content */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <Navbar />
+        <main className="flex-1">
+          <div className={mainWrapperClass}>
+            <Routes>
+              <Route path="/" element={<HomePage />} />
+              <Route path="/play" element={<PlayPage />} />
+              <Route
+                path="/play/private/:lobbyId"
+                element={<PrivateMatchLobbyPage />}
+              />
+              <Route
+                path="/play/private/:lobbyId/match"
+                element={<MatchGamePage />}
+              />
+              <Route path="/decks" element={<DecksPage />} />
+              <Route path="/decks/create" element={<CreateDeckPage />} />
+              <Route path="/decks/:deckId" element={<DeckDetailPage />} />
+              <Route
+                path="/decks/:deckId/edit"
+                element={<CreateDeckPage />}
+              />
+              <Route path="/cards" element={<CardGalleryPage />} />
+              <Route path="/rules" element={<RulesPage />} />
+              <Route path="/profile" element={<ProfilePage />} />
+              {/* TODO: 404 page later */}
+            </Routes>
+          </div>
+        </main>
       </div>
+
+      {/* Right side: friends sidebar (visible when logged in, but not during a match) */}
+      {user && !isMatchRoute && <FriendsSidebar />}
+    </div>
+  );
+}
+
+function App() {
+  return (
+    <BrowserRouter>
+      <AppLayout />
     </BrowserRouter>
   );
 }
