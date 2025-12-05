@@ -88,22 +88,20 @@
   height: 100%;
 }
 
-/* Slight horizontal + vertical offsets for piles */
-.rb-piles-bottom-lower {
-  transform: translate(-2rem, 0.5rem);
-}
+/* ------------------------------------------------------------------ */
+/* Piles layout                                                       */
+/* ------------------------------------------------------------------ */
 
-/* Top player's deck/discard band shifted left to line up under legend/champ
-   and nudged upwards slightly. */
+/* Top player's deck/discard: right + slightly up */
 .rb-piles-top-lower {
-  transform: translate(2rem, -0.5rem);
+  transform: translate(2rem, -1rem); /* tweak -0.5rem as needed */
 }
 
-/* Bottom player row: pull it up slightly so the gap
-   between base and battlefield matches the top player's gap. */
-.rb-player-row-bottom {
-  margin-top: calc(-0.25 * var(--rb-card-height));
+/* Bottom player's deck/discard: left + slightly down */
+.rb-piles-bottom-lower {
+  transform: translate(-2rem, 1rem); /* tweak 0.5rem as needed */
 }
+
 
 /* Zone text labels – hide them visually */
 .rb-zone-label {

@@ -48,6 +48,59 @@ export function getOgnCode(card: RiftboundCard): string | null {
   return `OGN-${padded}`;
 }
 
+// ---------- Categorisation helpers (battlefield / rune) ----------
+
+/**
+ * Battlefield cards are all numbered OGN-275 to OGN-298 (inclusive),
+ * including any alt art variants that share the same numeric front.
+ */
+export function isBattlefieldCard(card: RiftboundCard): boolean {
+  const ogn = getOgnCode(card);
+  if (!ogn) return false;
+
+  const match = /OGN-(\d{3})/i.exec(ogn);
+  if (!match) return false;
+
+  const num = parseInt(match[1], 10);
+  if (Number.isNaN(num)) return false;
+
+  return num >= 275 && num <= 298;
+}
+
+/**
+ * Rune cards contain one of these phrases in their name:
+ * "Mind Rune", "Order Rune", "Chaos Rune", "Fury Rune",
+ * "Calm Rune", "Body Rune".
+ *
+ * This catches alt art variants as long as they keep the rune name.
+ */
+const RUNE_NAME_MARKERS = [
+  'mind rune',
+  'order rune',
+  'chaos rune',
+  'fury rune',
+  'calm rune',
+  'body rune',
+];
+
+export function isRuneCard(card: RiftboundCard): boolean {
+  const name = card.name?.toLowerCase() ?? '';
+  if (!name) return false;
+
+  return RUNE_NAME_MARKERS.some((marker) => name.includes(marker));
+}
+
+/**
+ * Convenience classifier if you want a single enum-style value.
+ */
+export type RiftboundCardKind = 'battlefield' | 'rune' | 'normal';
+
+export function getCardKind(card: RiftboundCard): RiftboundCardKind {
+  if (isBattlefieldCard(card)) return 'battlefield';
+  if (isRuneCard(card)) return 'rune';
+  return 'normal';
+}
+
 // ---------- Import helpers (OGN lookups) ----------
 
 export function parseOgnCode(raw: string) {
