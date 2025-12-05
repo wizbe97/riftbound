@@ -252,7 +252,7 @@ function MatchGamePage() {
       },
     )
 
-  return () => unsub()
+    return () => unsub()
   }, [lobbyId])
 
   // if lobby closed, kick back
@@ -781,10 +781,79 @@ type DragState = {
   phase: DragPhase
 } | null
 
+/* ------------------------------------------------------------------ */
+/* Stacking helper: no overlap until needed                           */
+/* ------------------------------------------------------------------ */
+
+function useStackedCardLayout(cards: BoardCardInstance[]) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const [layout, setLayout] = useState<{
+    containerWidth: number
+    cardWidth: number
+  }>({ containerWidth: 0, cardWidth: 0 })
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+
+    const compute = () => {
+      const rect = el.getBoundingClientRect()
+      const cardEl = el.querySelector('.rb-card') as HTMLElement | null
+      const cardRect = cardEl?.getBoundingClientRect()
+
+      setLayout({
+        containerWidth: rect.width,
+        cardWidth: cardRect?.width ?? 0,
+      })
+    }
+
+    compute()
+
+    if (typeof ResizeObserver === 'undefined') {
+      return
+    }
+
+    const ro = new ResizeObserver(() => {
+      compute()
+    })
+    ro.observe(el)
+
+    return () => {
+      ro.disconnect()
+    }
+  }, [cards.length])
+
+  const getStyleForIndex = (index: number): React.CSSProperties => {
+    const { containerWidth, cardWidth } = layout
+    const count = cards.length
+
+    if (count <= 1 || !containerWidth || !cardWidth) {
+      // Single card or unknown sizes: simple small gap
+      return index === 0 ? {} : { marginLeft: 8 }
+    }
+
+    const idealGap = 8 // px: desired space between cards when possible
+
+    // Ideal total spacing if we had plenty of room
+    const idealSpacing = cardWidth + idealGap
+    const maxSpacing = (containerWidth - cardWidth) / (count - 1)
+
+    // Choose spacing that fits: either ideal (no overlap) or max that fits
+    const spacing = Math.min(idealSpacing, maxSpacing)
+
+    // marginLeft = spacing - cardWidth
+    // If spacing < cardWidth, this becomes negative => overlap
+    const marginLeft = index === 0 ? 0 : spacing - cardWidth
+
+    return { marginLeft }
+  }
+
+  return { containerRef, getStyleForIndex }
+}
+
 function GameBoardLayout({
   viewerIsP1,
   viewerRole,
-  bottomName,
   boardState,
   cardsByKey,
   onMoveCard,
@@ -1174,7 +1243,7 @@ function GameBoardLayout({
       </div>
 
       {/* BOTTOM ROW */}
-      <div className="flex flex-[1.5] items-stretch gap-3">
+      <div className="rb-player-row-bottom flex flex-[1.5] items-stretch gap-3">
         <PlayerRow
           orientation="bottom"
           runeDeckZone={bottomZones.runeDeck}
@@ -1238,11 +1307,6 @@ function GameBoardLayout({
           />
         </div>
       )}
-
-      <div className="mt-1 text-left text-[11px] font-semibold text-slate-300">
-        You:{' '}
-        <span className="text-amber-200">{bottomName ?? 'Unknown'}</span>
-      </div>
     </div>
   )
 }
@@ -1641,10 +1705,13 @@ function InnerBattlefieldHalf({
   draggingKey,
   debugLabel,
 }: InnerBattlefieldHalfProps) {
+  const { containerRef, getStyleForIndex } = useStackedCardLayout(cards)
+
   return (
     <div
       onMouseUp={(e) => onZoneMouseUp(zoneId, e)}
-      className="rb-battlefield-half relative flex w-full items-center justify-center gap-0 overflow-visible px-3"
+      ref={containerRef}
+      className="rb-battlefield-half relative flex w-full items-center justify-center overflow-visible px-3"
     >
       {debugLabel && <span className="rb-zone-label">{debugLabel}</span>}
       {cards.map((c, index) =>
@@ -1658,7 +1725,7 @@ function InnerBattlefieldHalf({
             onHoverEnd={onCardHoverEnd}
             onBeginDrag={onCardBeginDrag}
             draggingKey={draggingKey}
-            extraClassName={index === 0 ? '' : '-ml-6'}
+            stackStyle={getStyleForIndex(index)}
           />
         ) : null,
       )}
@@ -1705,10 +1772,13 @@ function ZoneRect({
   draggingKey,
   debugLabel,
 }: ZoneRectProps) {
+  const { containerRef, getStyleForIndex } = useStackedCardLayout(cards)
+
   return (
     <div
       onMouseUp={(e) => onZoneMouseUp(zoneId, e)}
-      className="rb-zone-rect relative flex w-full items-center justify-center gap-0 overflow-visible rounded-xl border border-amber-500/40 bg-slate-900/40 px-3"
+      ref={containerRef}
+      className="rb-zone-rect relative flex w-full items-center justify-center overflow-visible rounded-xl border border-amber-500/40 bg-slate-900/40 px-3"
     >
       {debugLabel && <span className="rb-zone-label">{debugLabel}</span>}
       {cards.map((c, index) =>
@@ -1722,7 +1792,7 @@ function ZoneRect({
             onHoverEnd={onCardHoverEnd}
             onBeginDrag={onCardBeginDrag}
             draggingKey={draggingKey}
-            extraClassName={index === 0 ? '' : '-ml-6'}
+            stackStyle={getStyleForIndex(index)}
           />
         ) : null,
       )}
@@ -1769,14 +1839,17 @@ function ZoneCardSlot({
   draggingKey,
   debugLabel,
 }: ZoneCardSlotProps) {
+  const { containerRef, getStyleForIndex } = useStackedCardLayout(cards)
+
   return (
     <div className="relative flex h-full w-full flex-col items-center gap-1">
       <div
         onMouseUp={(e) => onZoneMouseUp(zoneId, e)}
-        className="rb-zone-card-slot-inner relative flex w-full items-center justify-center overflow-visible rounded-lg border border-pink-400/60 bg-slate-900/60"
+        ref={containerRef}
+        className="rb-zone-card-slot-inner relative flex w-full items-center justify-center overflow-visible rounded-lg border border-amber-500/40 bg-slate-900/60"
       >
         {debugLabel && <span className="rb-zone-label">{debugLabel}</span>}
-        {cards.map((c) =>
+        {cards.map((c, index) =>
           c.card ? (
             <CardView
               key={c.key}
@@ -1787,6 +1860,7 @@ function ZoneCardSlot({
               onHoverEnd={onCardHoverEnd}
               onBeginDrag={onCardBeginDrag}
               draggingKey={draggingKey}
+              stackStyle={getStyleForIndex(index)}
             />
           ) : null,
         )}
@@ -1827,8 +1901,8 @@ type CardViewProps = {
     y: number,
   ) => void
   draggingKey: CardKey | null
-  /** Extra classes for stacking/overlap behaviour in certain zones */
-  extraClassName?: string
+  /** optional extra layout styles for stacking (marginLeft etc.) */
+  stackStyle?: React.CSSProperties
 }
 
 function CardView({
@@ -1839,7 +1913,7 @@ function CardView({
   onHoverEnd,
   onBeginDrag,
   draggingKey,
-  extraClassName = '',
+  stackStyle,
 }: CardViewProps) {
   const { key, card, rotation, isOwn } = instance
   if (!card) return null
@@ -1917,10 +1991,11 @@ function CardView({
         aspectRatio: '63 / 88',
         transform: `rotate(${rotation}deg)`,
         opacity: isDraggingThis ? 0 : 1,
+        ...(stackStyle ?? {}),
       }}
       className={`rb-card relative z-10 w-auto overflow-visible rounded-md border border-amber-400/70 bg-slate-950 shadow-lg transition-transform duration-150 ease-out ${
         isOwn ? 'rb-card-own hover:scale-[1.03]' : 'rb-card-opponent opacity-90'
-      } ${extraClassName}`}
+      }`}
     >
       <img
         src={card.images.large}

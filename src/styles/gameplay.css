@@ -23,23 +23,24 @@
 /* ------------------------------------------------------------------ */
 
 :root {
-  --rb-scale: 1;
-  --rb-card-base-height: clamp(5.25rem, 7vh, 7rem);
+  /* 1.25x up from previous baseline */
+  --rb-scale: 1.25;
+  --rb-card-base-height: clamp(5.5rem, 7vh, 7rem);
   --rb-card-height: calc(var(--rb-card-base-height) * var(--rb-scale));
   /* 63:88 width:height ratio ≈ 0.72 */
   --rb-card-width: calc(var(--rb-card-height) * 0.72);
 }
 
-/* Slowly scale up everything on big screens */
+/* Slowly scale up everything on big screens, also 1.25x-ish higher than before */
 @media (min-width: 1960px) and (min-height: 1080px) {
   :root {
-    --rb-scale: 1.15;
+    --rb-scale: 1.45;
   }
 }
 
 @media (min-width: 2400px) and (min-height: 1350px) {
   :root {
-    --rb-scale: 1.3;
+    --rb-scale: 1.65;
   }
 }
 
@@ -87,32 +88,26 @@
   height: 100%;
 }
 
-/* Slight horizontal offsets */
+/* Slight horizontal + vertical offsets for piles */
 .rb-piles-bottom-lower {
-  transform: translateX(-2rem);
+  transform: translate(-2rem, 0.5rem);
 }
 
-/* Top player's deck/discard band shifted left to line up under legend/champ */
+/* Top player's deck/discard band shifted left to line up under legend/champ
+   and nudged upwards slightly. */
 .rb-piles-top-lower {
-  transform: translateX(2rem);
+  transform: translate(2rem, -0.5rem);
 }
 
-/* Pull the bottom player's row upwards by half a card so
-   the distance from their base/rune row to the battlefield
-   matches the top player's. */
+/* Bottom player row: pull it up slightly so the gap
+   between base and battlefield matches the top player's gap. */
 .rb-player-row-bottom {
-  margin-top: calc(-0.5 * var(--rb-card-height));
+  margin-top: calc(-0.25 * var(--rb-card-height));
 }
 
-/* Zone text labels */
+/* Zone text labels – hide them visually */
 .rb-zone-label {
-  position: absolute;
-  bottom: 4px;
-  left: 6px;
-  font-size: 10px;
-  font-weight: 600;
-  color: #e5e7eb; /* light slate */
-  pointer-events: none;
+  display: none;
 }
 
 /* ------------------------------------------------------------------ */

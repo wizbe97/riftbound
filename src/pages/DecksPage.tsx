@@ -14,7 +14,7 @@ import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { ALL_CARDS } from '../data/riftboundCards';
 import type { RiftboundCard } from '../data/riftboundCards';
-import cardBack from '../assets/riftbound-back-of-card.png';
+import cardBack from '../assets/rune-back.png';
 
 type DeckCardDoc = { cardId: string; quantity: number };
 
