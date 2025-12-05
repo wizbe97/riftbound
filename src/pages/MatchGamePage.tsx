@@ -651,11 +651,10 @@ function DeckSelectionOverlay({
               return (
                 <label
                   key={deck.id}
-                  className={`flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2 ${
-                    selectedDeckId === deck.id
+                  className={`flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2 ${selectedDeckId === deck.id
                       ? 'border-amber-400 bg-slate-800/80'
                       : 'border-slate-700 bg-slate-900/60 hover:border-amber-500/70'
-                  }`}
+                    }`}
                 >
                   <input
                     type="radio"
@@ -944,10 +943,10 @@ function GameBoardLayout({
       setDrag((prev) =>
         prev && prev.phase === 'dragging'
           ? {
-              ...prev,
-              x: e.clientX,
-              y: e.clientY,
-            }
+            ...prev,
+            x: e.clientX,
+            y: e.clientY,
+          }
           : prev,
       )
     }
@@ -1060,16 +1059,16 @@ function GameBoardLayout({
 
   const handleCardContextMenu =
     (key: CardKey, isOwn: boolean) =>
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      if (!isOwn) return
-      e.preventDefault()
-      setCtxMenu({
-        open: true,
-        x: e.clientX,
-        y: e.clientY,
-        cardKey: key,
-      })
-    }
+      (e: React.MouseEvent<HTMLDivElement>) => {
+        if (!isOwn) return
+        e.preventDefault()
+        setCtxMenu({
+          open: true,
+          x: e.clientX,
+          y: e.clientY,
+          cardKey: key,
+        })
+      }
 
   const closeContextMenu = () =>
     setCtxMenu({ open: false, x: 0, y: 0, cardKey: null })
@@ -1100,51 +1099,51 @@ function GameBoardLayout({
   // Map physical zones -> top/bottom rows depending on POV
   const topZones = viewerIsP1
     ? {
-        runeDeck: 'p2RuneDeck' as BoardZoneId,
-        runeChannel: 'p2RuneChannel' as BoardZoneId,
-        base: 'p2Base' as BoardZoneId,
-        legend: 'p2LegendZone' as BoardZoneId,
-        champion: 'p2ChampionZone' as BoardZoneId,
-        discard: 'p2Discard' as BoardZoneId,
-        deck: 'p2Deck' as BoardZoneId,
-        bfLeftTop: 'battlefieldLeftP2' as BoardZoneId,
-        bfLeftBottom: 'battlefieldLeftP1' as BoardZoneId,
-        bfRightTop: 'battlefieldRightP2' as BoardZoneId,
-        bfRightBottom: 'battlefieldRightP1' as BoardZoneId,
-      }
+      runeDeck: 'p2RuneDeck' as BoardZoneId,
+      runeChannel: 'p2RuneChannel' as BoardZoneId,
+      base: 'p2Base' as BoardZoneId,
+      legend: 'p2LegendZone' as BoardZoneId,
+      champion: 'p2ChampionZone' as BoardZoneId,
+      discard: 'p2Discard' as BoardZoneId,
+      deck: 'p2Deck' as BoardZoneId,
+      bfLeftTop: 'battlefieldLeftP2' as BoardZoneId,
+      bfLeftBottom: 'battlefieldLeftP1' as BoardZoneId,
+      bfRightTop: 'battlefieldRightP2' as BoardZoneId,
+      bfRightBottom: 'battlefieldRightP1' as BoardZoneId,
+    }
     : {
-        runeDeck: 'p1RuneDeck' as BoardZoneId,
-        runeChannel: 'p1RuneChannel' as BoardZoneId,
-        base: 'p1Base' as BoardZoneId,
-        legend: 'p1LegendZone' as BoardZoneId,
-        champion: 'p1ChampionZone' as BoardZoneId,
-        discard: 'p1Discard' as BoardZoneId,
-        deck: 'p1Deck' as BoardZoneId,
-        bfLeftTop: 'battlefieldLeftP1' as BoardZoneId,
-        bfLeftBottom: 'battlefieldLeftP2' as BoardZoneId,
-        bfRightTop: 'battlefieldRightP1' as BoardZoneId,
-        bfRightBottom: 'battlefieldRightP2' as BoardZoneId,
-      }
+      runeDeck: 'p1RuneDeck' as BoardZoneId,
+      runeChannel: 'p1RuneChannel' as BoardZoneId,
+      base: 'p1Base' as BoardZoneId,
+      legend: 'p1LegendZone' as BoardZoneId,
+      champion: 'p1ChampionZone' as BoardZoneId,
+      discard: 'p1Discard' as BoardZoneId,
+      deck: 'p1Deck' as BoardZoneId,
+      bfLeftTop: 'battlefieldLeftP1' as BoardZoneId,
+      bfLeftBottom: 'battlefieldLeftP2' as BoardZoneId,
+      bfRightTop: 'battlefieldRightP1' as BoardZoneId,
+      bfRightBottom: 'battlefieldRightP2' as BoardZoneId,
+    }
 
   const bottomZones = viewerIsP1
     ? {
-        runeDeck: 'p1RuneDeck' as BoardZoneId,
-        runeChannel: 'p1RuneChannel' as BoardZoneId,
-        base: 'p1Base' as BoardZoneId,
-        legend: 'p1LegendZone' as BoardZoneId,
-        champion: 'p1ChampionZone' as BoardZoneId,
-        discard: 'p1Discard' as BoardZoneId,
-        deck: 'p1Deck' as BoardZoneId,
-      }
+      runeDeck: 'p1RuneDeck' as BoardZoneId,
+      runeChannel: 'p1RuneChannel' as BoardZoneId,
+      base: 'p1Base' as BoardZoneId,
+      legend: 'p1LegendZone' as BoardZoneId,
+      champion: 'p1ChampionZone' as BoardZoneId,
+      discard: 'p1Discard' as BoardZoneId,
+      deck: 'p1Deck' as BoardZoneId,
+    }
     : {
-        runeDeck: 'p2RuneDeck' as BoardZoneId,
-        runeChannel: 'p2RuneChannel' as BoardZoneId,
-        base: 'p2Base' as BoardZoneId,
-        legend: 'p2LegendZone' as BoardZoneId,
-        champion: 'p2ChampionZone' as BoardZoneId,
-        discard: 'p2Discard' as BoardZoneId,
-        deck: 'p2Deck' as BoardZoneId,
-      }
+      runeDeck: 'p2RuneDeck' as BoardZoneId,
+      runeChannel: 'p2RuneChannel' as BoardZoneId,
+      base: 'p2Base' as BoardZoneId,
+      legend: 'p2LegendZone' as BoardZoneId,
+      champion: 'p2ChampionZone' as BoardZoneId,
+      discard: 'p2Discard' as BoardZoneId,
+      deck: 'p2Deck' as BoardZoneId,
+    }
 
   const draggingKey = drag?.key ?? null
 
@@ -1160,7 +1159,7 @@ function GameBoardLayout({
 
   return (
     <div
-      className="relative flex h-full flex-col gap-2 rounded-xl bg-slate-950/80 px-4 py-2"
+      className="rb-game-board relative flex h-full flex-col gap-5 rounded-xl bg-slate-950/80 px-4 py-2"
       onClick={ctxMenu.open ? closeContextMenu : undefined}
       onMouseUp={handleBoardMouseUp}
     >
@@ -1211,7 +1210,7 @@ function GameBoardLayout({
       </div>
 
       {/* MIDDLE: two shared battlefields, each split into top/bottom halves */}
-      <div className="flex flex-[1.7] items-stretch justify-center gap-3">
+      <div className="flex flex-[1.7] items-stretch justify-center gap-5">
         <BattlefieldRect
           topZone={topZones.bfLeftTop}
           bottomZone={topZones.bfLeftBottom}
@@ -1285,9 +1284,8 @@ function GameBoardLayout({
       {/* Floating dragging card ghost that moves + rotates to slot */}
       {drag && currentGhostRotation != null && (
         <div
-          className={`rb-card-dragging-ghost ${
-            drag.phase === 'animatingToSlot' ? 'rb-card-ghost-animate' : ''
-          }`}
+          className={`rb-card-dragging-ghost ${drag.phase === 'animatingToSlot' ? 'rb-card-ghost-animate' : ''
+            }`}
           style={{
             left:
               drag.phase === 'animatingToSlot' && drag.targetX != null
@@ -1993,9 +1991,8 @@ function CardView({
         opacity: isDraggingThis ? 0 : 1,
         ...(stackStyle ?? {}),
       }}
-      className={`rb-card relative z-10 w-auto overflow-visible rounded-md border border-amber-400/70 bg-slate-950 shadow-lg transition-transform duration-150 ease-out ${
-        isOwn ? 'rb-card-own hover:scale-[1.03]' : 'rb-card-opponent opacity-90'
-      }`}
+      className={`rb-card relative z-10 w-auto overflow-visible rounded-md border border-amber-400/70 bg-slate-950 shadow-lg transition-transform duration-150 ease-out ${isOwn ? 'rb-card-own hover:scale-[1.03]' : 'rb-card-opponent opacity-90'
+        }`}
     >
       <img
         src={card.images.large}
