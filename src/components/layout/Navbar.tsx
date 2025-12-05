@@ -76,7 +76,7 @@ function Navbar() {
   return (
     <>
       <header className="rb-header">
-        {/* Inner container fills header height */}
+        {/* Inner container always centered, never full-width */}
         <div className="rb-header-inner mx-auto flex max-w-6xl items-center justify-between px-4">
           {/* Brand */}
           <Link

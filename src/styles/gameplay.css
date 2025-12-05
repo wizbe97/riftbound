@@ -61,9 +61,15 @@
   cursor: default;
 }
 
-/* Rectangular zones (base, rune channel) share the same height as a card */
+/* Rectangular zones (base, rune channel, etc) share the same height as a card */
 .rb-zone-rect {
   height: var(--rb-card-height);
+}
+
+/* "Wide" rectangular zones (base, rune channel, battlefields) occupy ~30% of the board width */
+.rb-zone-wide {
+  flex: 0 0 30%;
+  max-width: 30%;
 }
 
 /* Card-sized zones for legend / champion / rune deck / discard / deck.
@@ -75,7 +81,7 @@
 }
 
 /* Battlefield: total height = 2 × card height.
-   Each half gets 50% and thus matches base/rune height. */
+   (Unused by the new layout, but kept here in case you reintroduce it.) */
 .rb-battlefield-rect {
   height: calc(var(--rb-card-height) * 2);
 }
@@ -89,14 +95,14 @@
 }
 
 /* Slight horizontal offsets for piles.
-   No vertical shifting so top/bottom spacing stays symmetric. */
+   No vertical shifting so spacing stays symmetric. */
 .rb-piles-top-lower {
-  transform: translate(2rem, -0.5rem); /* tweak -0.5rem as needed */
+  transform: translateX(2rem); /* optional, not used by new layout */
 }
 
-/* Bottom player's deck/discard: left + slightly down */
+/* Bottom player's deck/discard: slight horizontal offset */
 .rb-piles-bottom-lower {
-  transform: translate(-2rem, 0.5rem); /* tweak 0.5rem as needed */
+  transform: translateX(-2rem); /* optional, not used by new layout */
 }
 
 /* Zone text labels – hide them visually */

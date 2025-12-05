@@ -18,6 +18,7 @@ export type BoardZoneId =
   | 'p1RuneDeck'
   | 'p1Discard'
   | 'p1Deck'
+  | 'p1Hand'          // 👈 NEW
   | 'p2LegendZone'
   | 'p2ChampionZone'
   | 'p2Base'
@@ -25,6 +26,7 @@ export type BoardZoneId =
   | 'p2RuneDeck'
   | 'p2Discard'
   | 'p2Deck'
+  | 'p2Hand'          // 👈 NEW
   | 'battlefieldLeftP1'
   | 'battlefieldLeftP2'
   | 'battlefieldRightP1'
@@ -54,6 +56,7 @@ export const OWN_ZONES: Record<'p1' | 'p2', BoardZoneId[]> = {
     'p1RuneDeck',
     'p1Discard',
     'p1Deck',
+    'p1Hand',             // 👈 NEW
     'battlefieldLeftP1',
     'battlefieldRightP1',
   ],
@@ -65,6 +68,7 @@ export const OWN_ZONES: Record<'p1' | 'p2', BoardZoneId[]> = {
     'p2RuneDeck',
     'p2Discard',
     'p2Deck',
+    'p2Hand',             // 👈 NEW
     'battlefieldLeftP2',
     'battlefieldRightP2',
   ],
