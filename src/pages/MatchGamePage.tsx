@@ -1,150 +1,80 @@
+// src/pages/MatchGamePage.tsx
 import type React from 'react'
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import {
-  collection,
-  doc,
-  onSnapshot,
-  orderBy,
-  query,
-  serverTimestamp,
-  updateDoc,
-  type Timestamp,
-} from 'firebase/firestore'
-import { db } from '../firebase'
 import { useAuth } from '../contexts/AuthContext'
 import { ALL_CARDS, type RiftboundCard } from '../data/riftboundCards'
+import { InteractiveCard } from '../components/cards/InteractiveCard'
+import { useLobby } from '../hooks/useLobby'
+import { useUserDecks } from '../hooks/useUserDecks'
+import { useDeckSelection } from '../hooks/useDeckSelection'
+import type { DeckSummary, Role } from '../types/riftboundGame'
+import {
+  type CardKey,
+  CARD_KEYS,
+  type BoardZoneId,
+  type BoardState,
+  DEFAULT_BOARD_STATE,
+  isPileZone,
+  canRoleUseZone,
+} from '../game/boardConfig'
+import { db } from '../firebase'
 import '../styles/gameplay.css'
 
 /* ------------------------------------------------------------------ */
-/* Types                                                              */
+/* Types for routing                                                  */
 /* ------------------------------------------------------------------ */
-
-type LobbyPlayer = {
-  uid: string
-  username: string
-}
-
-type Lobby = {
-  id: string
-  hostUid: string
-  hostUsername: string
-  status: 'open' | 'in-game' | 'closed'
-  mode: 'private'
-  p1: LobbyPlayer | null
-  p2: LobbyPlayer | null
-  spectators: LobbyPlayer[]
-  rules: {
-    bestOf: 1 | 3
-    sideboard: boolean
-  }
-  p1DeckId?: string | null
-  p2DeckId?: string | null
-  p1LegendCardId?: string | null
-  p1ChampionCardId?: string | null
-  p2LegendCardId?: string | null
-  p2ChampionCardId?: string | null
-}
-
-type DeckCardDoc = { cardId: string; quantity: number }
-
-type DeckDoc = {
-  name: string
-  ownerUid: string
-  cards: DeckCardDoc[]
-  sideboard?: DeckCardDoc[]
-  legendCardId?: string | null
-  championCardId?: string | null
-  createdAt?: Timestamp
-  updatedAt?: Timestamp
-}
-
-type DeckSummary = {
-  id: string
-  name: string
-  cardCount: number
-  legendCardId: string | null
-  championCardId: string | null
-}
 
 type RouteParams = {
   lobbyId: string
 }
 
-type Role = 'p1' | 'p2' | 'spectator' | 'none'
+/* ------------------------------------------------------------------ */
+/* Board layout types                                                 */
+/* ------------------------------------------------------------------ */
 
-type CardKey = 'p1Legend' | 'p1Champion' | 'p2Legend' | 'p2Champion'
-
-const CARD_KEYS: CardKey[] = ['p1Legend', 'p1Champion', 'p2Legend', 'p2Champion']
-
-type BoardZoneId =
-  | 'p1LegendZone'
-  | 'p1ChampionZone'
-  | 'p1Base'
-  | 'p1RuneChannel'
-  | 'p1RuneDeck'
-  | 'p1Discard'
-  | 'p1Deck'
-  | 'p2LegendZone'
-  | 'p2ChampionZone'
-  | 'p2Base'
-  | 'p2RuneChannel'
-  | 'p2RuneDeck'
-  | 'p2Discard'
-  | 'p2Deck'
-  | 'battlefieldLeftP1'
-  | 'battlefieldLeftP2'
-  | 'battlefieldRightP1'
-  | 'battlefieldRightP2'
-
-type BoardCardPlacement = {
+type BoardCardInstance = {
+  key: CardKey
+  card: RiftboundCard | null
   zoneId: BoardZoneId
-  rotation: number // 0 or 90
+  rotation: number
+  isOwn: boolean
 }
 
-type BoardState = Record<CardKey, BoardCardPlacement>
-
-const DEFAULT_BOARD_STATE: BoardState = {
-  p1Legend: { zoneId: 'p1LegendZone', rotation: 0 },
-  p1Champion: { zoneId: 'p1ChampionZone', rotation: 0 },
-  p2Legend: { zoneId: 'p2LegendZone', rotation: 0 },
-  p2Champion: { zoneId: 'p2ChampionZone', rotation: 0 },
+type GameBoardLayoutProps = {
+  viewerIsP1: boolean
+  viewerRole: Role
+  topName?: string
+  bottomName?: string
+  boardState: BoardState
+  cardsByKey: Record<CardKey, RiftboundCard | null>
+  onMoveCard: (
+    key: CardKey,
+    zone: BoardZoneId,
+    rotationOverride?: number,
+  ) => void
+  onRotateCard: (key: CardKey) => void
 }
 
-/** Zones a given role is allowed to drop into */
-const OWN_ZONES: Record<'p1' | 'p2', BoardZoneId[]> = {
-  p1: [
-    'p1LegendZone',
-    'p1ChampionZone',
-    'p1Base',
-    'p1RuneChannel',
-    'p1RuneDeck',
-    'p1Discard',
-    'p1Deck',
-    'battlefieldLeftP1',
-    'battlefieldRightP1',
-  ],
-  p2: [
-    'p2LegendZone',
-    'p2ChampionZone',
-    'p2Base',
-    'p2RuneChannel',
-    'p2RuneDeck',
-    'p2Discard',
-    'p2Deck',
-    'battlefieldLeftP2',
-    'battlefieldRightP2',
-  ],
-}
+type HoverPreviewState = {
+  card: RiftboundCard
+  x: number
+  y: number
+} | null
 
-const PILE_ZONES: BoardZoneId[] = ['p1Discard', 'p1Deck', 'p2Discard', 'p2Deck']
+type DragPhase = 'dragging' | 'animatingToSlot'
 
-const isPileZone = (zoneId: BoardZoneId): boolean => PILE_ZONES.includes(zoneId)
-
-const canRoleUseZone = (role: Role, zoneId: BoardZoneId): boolean => {
-  if (role !== 'p1' && role !== 'p2') return false
-  return OWN_ZONES[role].includes(zoneId)
-}
+type DragState = {
+  key: CardKey
+  card: RiftboundCard
+  x: number
+  y: number
+  fromRotation: number
+  toRotation: number
+  targetX?: number
+  targetY?: number
+  phase: DragPhase
+} | null
 
 /* ------------------------------------------------------------------ */
 /* Page component                                                     */
@@ -155,111 +85,19 @@ function MatchGamePage() {
   const navigate = useNavigate()
   const { user, profile } = useAuth()
 
-  const [lobby, setLobby] = useState<Lobby | null>(null)
-  const [lobbyLoading, setLobbyLoading] = useState(true)
-  const [lobbyError, setLobbyError] = useState<string | null>(null)
+  const {
+    lobby,
+    loading: lobbyLoading,
+    error: lobbyError,
+    boardState,
+    setBoardState,
+  } = useLobby(lobbyId)
 
-  const [decks, setDecks] = useState<DeckSummary[]>([])
-  const [decksLoading, setDecksLoading] = useState(true)
-  const [decksError, setDecksError] = useState<string | null>(null)
-
-  const [selectedDeckId, setSelectedDeckId] = useState<string | null>(null)
-  const [savingDeckChoice, setSavingDeckChoice] = useState(false)
-  const [saveError, setSaveError] = useState<string | null>(null)
-
-  const [boardState, setBoardState] = useState<BoardState>(() => ({
-    ...DEFAULT_BOARD_STATE,
-  }))
-
-  // Card lookup map
-  const cardById = useMemo(() => {
-    const map = new Map<string, RiftboundCard>()
-    for (const card of ALL_CARDS) map.set(card.id, card)
-    return map
-  }, [])
-
-  /* -------------------------- Lobby subscription -------------------------- */
-
-  useEffect(() => {
-    if (!lobbyId) {
-      setLobbyError('Missing lobby id')
-      setLobbyLoading(false)
-      return
-    }
-
-    const lobbyRef = doc(db, 'lobbies', lobbyId)
-
-    const unsub = onSnapshot(
-      lobbyRef,
-      (snap) => {
-        if (!snap.exists()) {
-          setLobby(null)
-          setLobbyError('Lobby not found.')
-          setLobbyLoading(false)
-          return
-        }
-
-        const data = snap.data() as any
-
-        const nextLobby: Lobby = {
-          id: snap.id,
-          hostUid: data.hostUid,
-          hostUsername: data.hostUsername,
-          status: data.status ?? 'open',
-          mode: data.mode ?? 'private',
-          p1: data.p1 ?? null,
-          p2: data.p2 ?? null,
-          spectators: Array.isArray(data.spectators) ? data.spectators : [],
-          rules: {
-            bestOf: (data.rules?.bestOf === 3 ? 3 : 1) as 1 | 3,
-            sideboard: !!data.rules?.sideboard,
-          },
-          p1DeckId: data.p1DeckId ?? null,
-          p2DeckId: data.p2DeckId ?? null,
-          p1LegendCardId: data.p1LegendCardId ?? null,
-          p1ChampionCardId: data.p1ChampionCardId ?? null,
-          p2LegendCardId: data.p2LegendCardId ?? null,
-          p2ChampionCardId: data.p2ChampionCardId ?? null,
-        }
-
-        setLobby(nextLobby)
-        setLobbyLoading(false)
-        setLobbyError(null)
-
-        // Board state (optional)
-        const rawBoard = (data.boardState ?? {}) as Record<string, any>
-        const merged: BoardState = { ...DEFAULT_BOARD_STATE }
-
-        CARD_KEYS.forEach((key) => {
-          const entry = rawBoard[key]
-          if (entry && typeof entry.zoneId === 'string') {
-            merged[key] = {
-              zoneId: entry.zoneId as BoardZoneId,
-              rotation:
-                typeof entry.rotation === 'number'
-                  ? entry.rotation
-                  : Number(entry.rotation) || 0,
-            }
-          }
-        })
-
-        setBoardState(merged)
-      },
-      (err) => {
-        console.error('[MatchGame] failed to subscribe to lobby', err)
-        setLobbyError('Failed to load lobby.')
-        setLobbyLoading(false)
-      },
-    )
-
-    return () => unsub()
-  }, [lobbyId])
-
-  // if lobby closed, kick back
-  useEffect(() => {
-    if (!lobby) return
-    if (lobby.status === 'closed') navigate('/play')
-  }, [lobby, navigate])
+  const {
+    decks,
+    loading: decksLoading,
+    error: decksError,
+  } = useUserDecks(user?.uid)
 
   /* ------------------------------ Role logic ------------------------------ */
 
@@ -271,124 +109,36 @@ function MatchGamePage() {
     return 'none'
   }, [lobby, profile])
 
-  /* ----------------------------- Deck loading ----------------------------- */
+  /* --------------------------- Deck selection ----------------------------- */
 
+  const {
+    selectedDeckId,
+    setSelectedDeckId,
+    myDeckLockedIn,
+    opponentDeckLockedIn,
+    bothDecksLockedIn,
+    saveError,
+    saving,
+    handleConfirmDeck,
+  } = useDeckSelection({
+    lobby,
+    role,
+    lobbyId,
+    decks,
+  })
+
+  // Card lookup map
+  const cardById = useMemo(() => {
+    const map = new Map<string, RiftboundCard>()
+    for (const card of ALL_CARDS) map.set(card.id, card)
+    return map
+  }, [])
+
+  // if lobby closed, kick back
   useEffect(() => {
-    if (!user) {
-      setDecks([])
-      setDecksLoading(false)
-      return
-    }
-
-    const decksRef = collection(db, 'users', user.uid, 'decks')
-    const q = query(decksRef, orderBy('createdAt', 'desc'))
-
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        const list: DeckSummary[] = snap.docs.map((d) => {
-          const data = d.data() as DeckDoc
-          const mainCount = (data.cards ?? []).reduce(
-            (sum, c) => sum + (c.quantity ?? 0),
-            0,
-          )
-          const sideCount = (data.sideboard ?? []).reduce(
-            (sum, c) => sum + (c.quantity ?? 0),
-            0,
-          )
-
-          return {
-            id: d.id,
-            name: data.name ?? 'Untitled Deck',
-            cardCount: mainCount + sideCount,
-            legendCardId: data.legendCardId ?? null,
-            championCardId: data.championCardId ?? null,
-          }
-        })
-
-        setDecks(list)
-        setDecksLoading(false)
-        setDecksError(null)
-      },
-      (err) => {
-        console.error('[MatchGame] failed to load decks', err)
-        setDecks([])
-        setDecksLoading(false)
-        setDecksError('Failed to load your decks.')
-      },
-    )
-
-    return () => unsub()
-  }, [user?.uid])
-
-  // Seed deck selection from lobby
-  useEffect(() => {
-    if (!lobby || role === 'none' || role === 'spectator') return
-
-    const currentDeckId =
-      role === 'p1' ? lobby.p1DeckId ?? null : lobby.p2DeckId ?? null
-
-    if (currentDeckId && !selectedDeckId) setSelectedDeckId(currentDeckId)
-  }, [lobby, role, selectedDeckId])
-
-  const myDeckLockedIn =
-    role === 'p1'
-      ? !!lobby?.p1DeckId
-      : role === 'p2'
-        ? !!lobby?.p2DeckId
-        : true
-
-  const opponentDeckLockedIn =
-    role === 'p1'
-      ? !!lobby?.p2DeckId
-      : role === 'p2'
-        ? !!lobby?.p1DeckId
-        : !!(lobby?.p1DeckId && lobby?.p2DeckId)
-
-  const bothDecksLockedIn = !!(lobby?.p1DeckId && lobby?.p2DeckId)
-
-  const handleConfirmDeck = async () => {
-    if (!lobby || !lobbyId) return
-    if (role !== 'p1' && role !== 'p2') return
-
-    if (!selectedDeckId) {
-      setSaveError('Please select a deck first.')
-      return
-    }
-
-    const deck = decks.find((d) => d.id === selectedDeckId)
-    if (!deck) {
-      setSaveError('Selected deck not found.')
-      return
-    }
-
-    try {
-      setSavingDeckChoice(true)
-      setSaveError(null)
-
-      const lobbyRef = doc(db, 'lobbies', lobbyId)
-      const payload: any = {
-        updatedAt: serverTimestamp(),
-      }
-
-      if (role === 'p1') {
-        payload.p1DeckId = deck.id
-        payload.p1LegendCardId = deck.legendCardId ?? null
-        payload.p1ChampionCardId = deck.championCardId ?? null
-      } else {
-        payload.p2DeckId = deck.id
-        payload.p2LegendCardId = deck.legendCardId ?? null
-        payload.p2ChampionCardId = deck.championCardId ?? null
-      }
-
-      await updateDoc(lobbyRef, payload)
-    } catch (err) {
-      console.error('[MatchGame] failed to confirm deck', err)
-      setSaveError('Failed to confirm deck. Please try again.')
-    } finally {
-      setSavingDeckChoice(false)
-    }
-  }
+    if (!lobby) return
+    if (lobby.status === 'closed') navigate('/play')
+  }, [lobby, navigate])
 
   /* -------------------------- Board move / rotate ------------------------- */
 
@@ -410,7 +160,7 @@ function MatchGamePage() {
             ? 90
             : current.rotation
 
-    const nextLocal: BoardCardPlacement = { zoneId, rotation: nextRotation }
+    const nextLocal = { zoneId, rotation: nextRotation }
 
     setBoardState((prev) => ({
       ...prev,
@@ -418,6 +168,9 @@ function MatchGamePage() {
     }))
 
     try {
+      const { doc, updateDoc, serverTimestamp } = await import(
+        'firebase/firestore'
+      )
       const lobbyRef = doc(db, 'lobbies', lobbyId)
       await updateDoc(lobbyRef, {
         [`boardState.${cardKey}`]: {
@@ -442,7 +195,7 @@ function MatchGamePage() {
     }
 
     const nextRotation = current.rotation === 90 ? 0 : 90
-    const nextLocal: BoardCardPlacement = {
+    const nextLocal = {
       ...current,
       rotation: nextRotation,
     }
@@ -453,6 +206,9 @@ function MatchGamePage() {
     }))
 
     try {
+      const { doc, updateDoc, serverTimestamp } = await import(
+        'firebase/firestore'
+      )
       const lobbyRef = doc(db, 'lobbies', lobbyId)
       await updateDoc(lobbyRef, {
         [`boardState.${cardKey}`]: {
@@ -581,7 +337,7 @@ function MatchGamePage() {
           setSelectedDeckId={setSelectedDeckId}
           cardById={cardById}
           saveError={saveError}
-          saving={savingDeckChoice}
+          saving={saving}
           onConfirm={handleConfirmDeck}
           onCancel={() => navigate(`/play/private/${lobby.id}`)}
         />
@@ -651,10 +407,11 @@ function DeckSelectionOverlay({
               return (
                 <label
                   key={deck.id}
-                  className={`flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2 ${selectedDeckId === deck.id
+                  className={`flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2 ${
+                    selectedDeckId === deck.id
                       ? 'border-amber-400 bg-slate-800/80'
                       : 'border-slate-700 bg-slate-900/60 hover:border-amber-500/70'
-                    }`}
+                  }`}
                 >
                   <input
                     type="radio"
@@ -734,53 +491,6 @@ function SmallCardPreview({
 }
 
 /* ------------------------------------------------------------------ */
-/* Board layout                                                       */
-/* ------------------------------------------------------------------ */
-
-type BoardCardInstance = {
-  key: CardKey
-  card: RiftboundCard | null
-  zoneId: BoardZoneId
-  rotation: number
-  isOwn: boolean
-}
-
-type GameBoardLayoutProps = {
-  viewerIsP1: boolean
-  viewerRole: Role
-  topName?: string
-  bottomName?: string
-  boardState: BoardState
-  cardsByKey: Record<CardKey, RiftboundCard | null>
-  onMoveCard: (
-    key: CardKey,
-    zone: BoardZoneId,
-    rotationOverride?: number,
-  ) => void
-  onRotateCard: (key: CardKey) => void
-}
-
-type HoverPreviewState = {
-  card: RiftboundCard
-  x: number
-  y: number
-} | null
-
-type DragPhase = 'dragging' | 'animatingToSlot'
-
-type DragState = {
-  key: CardKey
-  card: RiftboundCard
-  x: number
-  y: number
-  fromRotation: number
-  toRotation: number
-  targetX?: number
-  targetY?: number
-  phase: DragPhase
-} | null
-
-/* ------------------------------------------------------------------ */
 /* Stacking helper: no overlap until needed                           */
 /* ------------------------------------------------------------------ */
 
@@ -849,6 +559,10 @@ function useStackedCardLayout(cards: BoardCardInstance[]) {
 
   return { containerRef, getStyleForIndex }
 }
+
+/* ------------------------------------------------------------------ */
+/* Game board layout                                                  */
+/* ------------------------------------------------------------------ */
 
 function GameBoardLayout({
   viewerIsP1,
@@ -943,10 +657,10 @@ function GameBoardLayout({
       setDrag((prev) =>
         prev && prev.phase === 'dragging'
           ? {
-            ...prev,
-            x: e.clientX,
-            y: e.clientY,
-          }
+              ...prev,
+              x: e.clientX,
+              y: e.clientY,
+            }
           : prev,
       )
     }
@@ -1059,16 +773,16 @@ function GameBoardLayout({
 
   const handleCardContextMenu =
     (key: CardKey, isOwn: boolean) =>
-      (e: React.MouseEvent<HTMLDivElement>) => {
-        if (!isOwn) return
-        e.preventDefault()
-        setCtxMenu({
-          open: true,
-          x: e.clientX,
-          y: e.clientY,
-          cardKey: key,
-        })
-      }
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!isOwn) return
+      e.preventDefault()
+      setCtxMenu({
+        open: true,
+        x: e.clientX,
+        y: e.clientY,
+        cardKey: key,
+      })
+    }
 
   const closeContextMenu = () =>
     setCtxMenu({ open: false, x: 0, y: 0, cardKey: null })
@@ -1099,51 +813,51 @@ function GameBoardLayout({
   // Map physical zones -> top/bottom rows depending on POV
   const topZones = viewerIsP1
     ? {
-      runeDeck: 'p2RuneDeck' as BoardZoneId,
-      runeChannel: 'p2RuneChannel' as BoardZoneId,
-      base: 'p2Base' as BoardZoneId,
-      legend: 'p2LegendZone' as BoardZoneId,
-      champion: 'p2ChampionZone' as BoardZoneId,
-      discard: 'p2Discard' as BoardZoneId,
-      deck: 'p2Deck' as BoardZoneId,
-      bfLeftTop: 'battlefieldLeftP2' as BoardZoneId,
-      bfLeftBottom: 'battlefieldLeftP1' as BoardZoneId,
-      bfRightTop: 'battlefieldRightP2' as BoardZoneId,
-      bfRightBottom: 'battlefieldRightP1' as BoardZoneId,
-    }
+        runeDeck: 'p2RuneDeck' as BoardZoneId,
+        runeChannel: 'p2RuneChannel' as BoardZoneId,
+        base: 'p2Base' as BoardZoneId,
+        legend: 'p2LegendZone' as BoardZoneId,
+        champion: 'p2ChampionZone' as BoardZoneId,
+        discard: 'p2Discard' as BoardZoneId,
+        deck: 'p2Deck' as BoardZoneId,
+        bfLeftTop: 'battlefieldLeftP2' as BoardZoneId,
+        bfLeftBottom: 'battlefieldLeftP1' as BoardZoneId,
+        bfRightTop: 'battlefieldRightP2' as BoardZoneId,
+        bfRightBottom: 'battlefieldRightP1' as BoardZoneId,
+      }
     : {
-      runeDeck: 'p1RuneDeck' as BoardZoneId,
-      runeChannel: 'p1RuneChannel' as BoardZoneId,
-      base: 'p1Base' as BoardZoneId,
-      legend: 'p1LegendZone' as BoardZoneId,
-      champion: 'p1ChampionZone' as BoardZoneId,
-      discard: 'p1Discard' as BoardZoneId,
-      deck: 'p1Deck' as BoardZoneId,
-      bfLeftTop: 'battlefieldLeftP1' as BoardZoneId,
-      bfLeftBottom: 'battlefieldLeftP2' as BoardZoneId,
-      bfRightTop: 'battlefieldRightP1' as BoardZoneId,
-      bfRightBottom: 'battlefieldRightP2' as BoardZoneId,
-    }
+        runeDeck: 'p1RuneDeck' as BoardZoneId,
+        runeChannel: 'p1RuneChannel' as BoardZoneId,
+        base: 'p1Base' as BoardZoneId,
+        legend: 'p1LegendZone' as BoardZoneId,
+        champion: 'p1ChampionZone' as BoardZoneId,
+        discard: 'p1Discard' as BoardZoneId,
+        deck: 'p1Deck' as BoardZoneId,
+        bfLeftTop: 'battlefieldLeftP1' as BoardZoneId,
+        bfLeftBottom: 'battlefieldLeftP2' as BoardZoneId,
+        bfRightTop: 'battlefieldRightP1' as BoardZoneId,
+        bfRightBottom: 'battlefieldRightP2' as BoardZoneId,
+      }
 
   const bottomZones = viewerIsP1
     ? {
-      runeDeck: 'p1RuneDeck' as BoardZoneId,
-      runeChannel: 'p1RuneChannel' as BoardZoneId,
-      base: 'p1Base' as BoardZoneId,
-      legend: 'p1LegendZone' as BoardZoneId,
-      champion: 'p1ChampionZone' as BoardZoneId,
-      discard: 'p1Discard' as BoardZoneId,
-      deck: 'p1Deck' as BoardZoneId,
-    }
+        runeDeck: 'p1RuneDeck' as BoardZoneId,
+        runeChannel: 'p1RuneChannel' as BoardZoneId,
+        base: 'p1Base' as BoardZoneId,
+        legend: 'p1LegendZone' as BoardZoneId,
+        champion: 'p1ChampionZone' as BoardZoneId,
+        discard: 'p1Discard' as BoardZoneId,
+        deck: 'p1Deck' as BoardZoneId,
+      }
     : {
-      runeDeck: 'p2RuneDeck' as BoardZoneId,
-      runeChannel: 'p2RuneChannel' as BoardZoneId,
-      base: 'p2Base' as BoardZoneId,
-      legend: 'p2LegendZone' as BoardZoneId,
-      champion: 'p2ChampionZone' as BoardZoneId,
-      discard: 'p2Discard' as BoardZoneId,
-      deck: 'p2Deck' as BoardZoneId,
-    }
+        runeDeck: 'p2RuneDeck' as BoardZoneId,
+        runeChannel: 'p2RuneChannel' as BoardZoneId,
+        base: 'p2Base' as BoardZoneId,
+        legend: 'p2LegendZone' as BoardZoneId,
+        champion: 'p2ChampionZone' as BoardZoneId,
+        discard: 'p2Discard' as BoardZoneId,
+        deck: 'p2Deck' as BoardZoneId,
+      }
 
   const draggingKey = drag?.key ?? null
 
@@ -1284,8 +998,9 @@ function GameBoardLayout({
       {/* Floating dragging card ghost that moves + rotates to slot */}
       {drag && currentGhostRotation != null && (
         <div
-          className={`rb-card-dragging-ghost ${drag.phase === 'animatingToSlot' ? 'rb-card-ghost-animate' : ''
-            }`}
+          className={`rb-card-dragging-ghost ${
+            drag.phase === 'animatingToSlot' ? 'rb-card-ghost-animate' : ''
+          }`}
           style={{
             left:
               drag.phase === 'animatingToSlot' && drag.targetX != null
@@ -1714,9 +1429,12 @@ function InnerBattlefieldHalf({
       {debugLabel && <span className="rb-zone-label">{debugLabel}</span>}
       {cards.map((c, index) =>
         c.card ? (
-          <CardView
+          <InteractiveCard
             key={c.key}
-            instance={c}
+            cardKey={c.key}
+            card={c.card}
+            rotation={c.rotation}
+            isOwn={c.isOwn}
             onRotate={onCardRotate}
             onContextMenu={onCardContextMenu}
             onHoverStart={onCardHoverStart}
@@ -1781,9 +1499,12 @@ function ZoneRect({
       {debugLabel && <span className="rb-zone-label">{debugLabel}</span>}
       {cards.map((c, index) =>
         c.card ? (
-          <CardView
+          <InteractiveCard
             key={c.key}
-            instance={c}
+            cardKey={c.key}
+            card={c.card}
+            rotation={c.rotation}
+            isOwn={c.isOwn}
             onRotate={onCardRotate}
             onContextMenu={onCardContextMenu}
             onHoverStart={onCardHoverStart}
@@ -1849,9 +1570,12 @@ function ZoneCardSlot({
         {debugLabel && <span className="rb-zone-label">{debugLabel}</span>}
         {cards.map((c, index) =>
           c.card ? (
-            <CardView
+            <InteractiveCard
               key={c.key}
-              instance={c}
+              cardKey={c.key}
+              card={c.card}
+              rotation={c.rotation}
+              isOwn={c.isOwn}
               onRotate={onCardRotate}
               onContextMenu={onCardContextMenu}
               onHoverStart={onCardHoverStart}
@@ -1876,129 +1600,6 @@ function PileSlotWithLabel({
   return (
     <div className="flex w-1/2 flex-col items-stretch">
       <ZoneCardSlot {...slotProps} debugLabel={debugLabel} />
-    </div>
-  )
-}
-
-/* Actual card visual with rotation + smooth transform */
-
-type CardViewProps = {
-  instance: BoardCardInstance
-  onRotate: (key: CardKey, isOwn: boolean) => void
-  onContextMenu: (
-    key: CardKey,
-    isOwn: boolean,
-  ) => (e: React.MouseEvent<HTMLDivElement>) => void
-  onHoverStart: (card: RiftboundCard, x: number, y: number) => void
-  onHoverEnd: () => void
-  onBeginDrag: (
-    key: CardKey,
-    card: RiftboundCard,
-    rotation: number,
-    x: number,
-    y: number,
-  ) => void
-  draggingKey: CardKey | null
-  /** optional extra layout styles for stacking (marginLeft etc.) */
-  stackStyle?: React.CSSProperties
-}
-
-function CardView({
-  instance,
-  onRotate,
-  onContextMenu,
-  onHoverStart,
-  onHoverEnd,
-  onBeginDrag,
-  draggingKey,
-  stackStyle,
-}: CardViewProps) {
-  const { key, card, rotation, isOwn } = instance
-  if (!card) return null
-
-  const isDraggingThis = draggingKey === key
-
-  // --- click vs hold-to-drag state ---
-  const pressTimerRef = useRef<number | null>(null)
-  const isPressingRef = useRef(false)
-  const dragStartedRef = useRef(false)
-
-  const clearPressTimer = () => {
-    if (pressTimerRef.current !== null) {
-      window.clearTimeout(pressTimerRef.current)
-      pressTimerRef.current = null
-    }
-  }
-
-  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isOwn) return
-    if (e.button !== 0) return // left click only
-
-    isPressingRef.current = true
-    dragStartedRef.current = false
-    clearPressTimer()
-
-    const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect()
-    const startX = rect.left + rect.width / 2
-    const startY = rect.top + rect.height / 2
-
-    // Short delay before we treat it as a drag.
-    pressTimerRef.current = window.setTimeout(() => {
-      if (!isPressingRef.current) return
-      dragStartedRef.current = true
-      onHoverEnd() // kill hover preview when we start dragging
-      onBeginDrag(key, card, rotation, startX, startY)
-    }, 150)
-  }
-
-  const handleMouseUp = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isOwn) return
-    if (e.button !== 0) return
-
-    clearPressTimer()
-
-    // If we never started a drag, treat as a click -> rotate
-    if (!dragStartedRef.current) {
-      onRotate(key, isOwn)
-    }
-
-    isPressingRef.current = false
-    dragStartedRef.current = false
-  }
-
-  const handleMouseLeave = () => {
-    // Stop hover when leaving, but allow press timer to still turn into a drag
-    onHoverEnd()
-  }
-
-  const handleMouseEnter = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect()
-    const xRight = rect.right + 16 // preview to the right of the card
-    const centerY = rect.top + rect.height / 2
-    onHoverStart(card, xRight, centerY)
-  }
-
-  return (
-    <div
-      onMouseDown={handleMouseDown}
-      onMouseUp={handleMouseUp}
-      onContextMenu={onContextMenu(key, isOwn)}
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
-      style={{
-        aspectRatio: '63 / 88',
-        transform: `rotate(${rotation}deg)`,
-        opacity: isDraggingThis ? 0 : 1,
-        ...(stackStyle ?? {}),
-      }}
-      className={`rb-card relative z-10 w-auto overflow-visible rounded-md border border-amber-400/70 bg-slate-950 shadow-lg transition-transform duration-150 ease-out ${isOwn ? 'rb-card-own hover:scale-[1.03]' : 'rb-card-opponent opacity-90'
-        }`}
-    >
-      <img
-        src={card.images.large}
-        alt={card.name}
-        className="h-full w-full object-cover"
-      />
     </div>
   )
 }
