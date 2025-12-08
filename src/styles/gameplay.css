@@ -1,37 +1,25 @@
-/* Gameplay-specific layout & sizing */
-
-/* Full-height game area under navbar (navbar is 72px tall) */
+/* gameplay.css */
 .rb-game-root {
   height: calc(100vh - 72px);
 }
 
-/* Main gameplay column: ~17/21 width.
-   Right-hand spacer uses remaining 4/21 (2/3 of old 2/7). */
 .rb-game-main {
   flex: 0 0 calc(100% * 17 / 21);
   max-width: calc(100% * 17 / 21);
 }
 
-/* Right-hand spacer for future chat; keep it invisible, now thinner. */
 .rb-game-chat-spacer {
   flex: 0 0 calc(100% * 4 / 21);
   max-width: calc(100% * 4 / 21);
 }
 
-/* ------------------------------------------------------------------ */
-/* Card + zone scaling                                                */
-/* ------------------------------------------------------------------ */
-
 :root {
-  /* 1.25x up from previous baseline */
   --rb-scale: 1.25;
   --rb-card-base-height: clamp(5.5rem, 7vh, 7rem);
   --rb-card-height: calc(var(--rb-card-base-height) * var(--rb-scale));
-  /* 63:88 width:height ratio ≈ 0.72 */
   --rb-card-width: calc(var(--rb-card-height) * 0.72);
 }
 
-/* Slowly scale up everything on big screens, also 1.25x-ish higher than before */
 @media (min-width: 1960px) and (min-height: 1080px) {
   :root {
     --rb-scale: 1.45;
@@ -44,101 +32,13 @@
   }
 }
 
-/* Generic card container */
-.rb-card {
-  height: var(--rb-card-height);
-  max-height: var(--rb-card-height);
-  width: var(--rb-card-width);
-  max-width: var(--rb-card-width);
-}
-
-/* Cursor behaviour */
-.rb-card-own {
-  cursor: grab;
-}
-
-.rb-card-opponent {
-  cursor: default;
-}
-
-/* Rectangular zones (base, rune channel, etc) share the same height as a card */
 .rb-zone-rect {
   height: var(--rb-card-height);
 }
 
-/* "Wide" rectangular zones (base, rune channel, battlefields) occupy ~30% of the board width */
-.rb-zone-wide {
-  flex: 0 0 30%;
-  max-width: 30%;
-}
-
-/* Card-sized zones for legend / champion / rune deck / discard / deck.
-   Keep them only slightly wider than the card itself and scale together. */
 .rb-zone-card-slot-inner {
   height: var(--rb-card-height);
+  width: var(--rb-card-width);
   min-width: var(--rb-card-width);
-  max-width: calc(var(--rb-card-width) + 0.75rem);
-}
-
-/* Battlefield: total height = 2 × card height.
-   (Unused by the new layout, but kept here in case you reintroduce it.) */
-.rb-battlefield-rect {
-  height: calc(var(--rb-card-height) * 2);
-}
-
-.rb-battlefield-half-wrapper {
-  flex: 0 0 50%;
-}
-
-.rb-battlefield-half {
-  height: 100%;
-}
-
-/* Slight horizontal offsets for piles.
-   No vertical shifting so spacing stays symmetric. */
-.rb-piles-top-lower {
-  transform: translateX(2rem); /* optional, not used by new layout */
-}
-
-/* Bottom player's deck/discard: slight horizontal offset */
-.rb-piles-bottom-lower {
-  transform: translateX(-2rem); /* optional, not used by new layout */
-}
-
-/* Zone text labels – hide them visually */
-.rb-zone-label {
-  display: none;
-}
-
-/* ------------------------------------------------------------------ */
-/* Dragging card ghost + animation to slot                            */
-/* ------------------------------------------------------------------ */
-
-.rb-card-dragging-ghost {
-  position: fixed;
-  pointer-events: none;
-  z-index: 60;
-}
-
-/* When snapping to a slot, animate position + rotation */
-.rb-card-ghost-animate {
-  transition: left 0.16s ease-out, top 0.16s ease-out,
-    transform 0.16s ease-out;
-}
-
-/* Slightly larger than the normal card for that "picked up" feel */
-.rb-card-dragging-ghost img {
-  transform: scale(1.05);
-}
-
-/* Prevent native image dragging/selecting */
-.rb-card img {
-  -webkit-user-drag: none;
-  user-select: none;
-}
-
-/* Global grabbing cursor while dragging a card */
-body.rb-dragging-cursor,
-body.rb-dragging-cursor * {
-  cursor: grabbing !important;
+  max-width: var(--rb-card-width);
 }

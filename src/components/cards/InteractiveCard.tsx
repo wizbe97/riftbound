@@ -1,3 +1,4 @@
+// src/components/cards/InteractiveCard.tsx
 import type React from 'react'
 import { useRef } from 'react'
 import type { RiftboundCard } from '../../data/riftboundCards'
@@ -23,22 +24,10 @@ export type InteractiveCardProps = {
     y: number,
   ) => void
   draggingKey: CardKey | null
-  /** optional extra layout styles for stacking (marginLeft etc.) */
   stackStyle?: React.CSSProperties
 }
 
-/**
- * InteractiveCard
- *
- * Handles:
- * - hover preview (big image on the side)
- * - click-to-rotate (left click, no drag)
- * - drag start (left click + move beyond threshold)
- * - right-click context menu (discard / send to deck)
- *
- * All board-level logic (moving between zones, animating ghost, etc.)
- * stays in GameBoardLayout.
- */
+
 export function InteractiveCard({
   cardKey,
   card,
@@ -54,16 +43,15 @@ export function InteractiveCard({
 }: InteractiveCardProps) {
   const isDraggingThis = draggingKey === cardKey
 
-  // --- click vs drag detection (no time-based delay) ---
   const isPressingRef = useRef(false)
   const dragStartedRef = useRef(false)
   const startPosRef = useRef<{ x: number; y: number } | null>(null)
 
-  const DRAG_THRESHOLD_PX = 4 // small movement before we treat it as a drag
+  const DRAG_THRESHOLD_PX = 4
 
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!isOwn) return
-    if (e.button !== 0) return // left click only
+    if (e.button !== 0) return
 
     isPressingRef.current = true
     dragStartedRef.current = false
@@ -74,7 +62,6 @@ export function InteractiveCard({
     if (!isOwn) return
     if (e.button !== 0) return
 
-    // If we never started a drag, treat as a click -> rotate
     if (!dragStartedRef.current) {
       onRotate(cardKey, isOwn)
     }
@@ -99,9 +86,8 @@ export function InteractiveCard({
       return
     }
 
-    // Movement exceeded threshold -> start drag immediately
     dragStartedRef.current = true
-    onHoverEnd() // kill hover preview when we start dragging
+    onHoverEnd()
 
     const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect()
     const startX = rect.left + rect.width / 2
@@ -111,14 +97,12 @@ export function InteractiveCard({
   }
 
   const handleMouseLeave = () => {
-    // Stop hover when leaving. We still allow press+move outside
-    // to continue dragging via the board-level handlers.
     onHoverEnd()
   }
 
   const handleMouseEnter = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect()
-    const xRight = rect.right + 16 // preview to the right of the card
+    const xRight = rect.right + 16
     const centerY = rect.top + rect.height / 2
     onHoverStart(card, xRight, centerY)
   }

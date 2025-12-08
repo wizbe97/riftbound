@@ -3,20 +3,17 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   collection,
   doc,
-  limit,
   onSnapshot,
-  orderBy,
-  query,
   serverTimestamp,
   setDoc,
   type DocumentData,
-  type Timestamp,
   updateDoc,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { useLobbySession } from '../contexts/LobbyContext';
 import { changeLobbySeat, leaveLobbyForUser } from '../utils/lobby';
+import ChatBox from '../components/ChatBox';
 
 type LobbyPlayer = {
   uid: string;
@@ -61,16 +58,6 @@ type Friend = {
   friendCode: string;
 };
 
-type ChatMessage = {
-  id: string;
-  uid: string;
-  username: string;
-  role: 'p1' | 'p2' | 'spectator';
-  text: string;
-  createdAt?: Timestamp;
-  system?: boolean;
-};
-
 function mapLobby(id: string, data: DocumentData): Lobby {
   const rawRules = (data.rules ?? {}) as Partial<LobbyRules>;
   const rules: LobbyRules = {
@@ -83,18 +70,18 @@ function mapLobby(id: string, data: DocumentData): Lobby {
 
   const p1Deck: SelectedDeckInfo | null = rawP1Deck
     ? {
-      ownerUid: rawP1Deck.ownerUid ?? '',
-      deckId: rawP1Deck.deckId ?? '',
-      deckName: rawP1Deck.deckName ?? 'Unknown Deck',
-    }
+        ownerUid: rawP1Deck.ownerUid ?? '',
+        deckId: rawP1Deck.deckId ?? '',
+        deckName: rawP1Deck.deckName ?? 'Unknown Deck',
+      }
     : null;
 
   const p2Deck: SelectedDeckInfo | null = rawP2Deck
     ? {
-      ownerUid: rawP2Deck.ownerUid ?? '',
-      deckId: rawP2Deck.deckId ?? '',
-      deckName: rawP2Deck.deckName ?? 'Unknown Deck',
-    }
+        ownerUid: rawP2Deck.ownerUid ?? '',
+        deckId: rawP2Deck.deckId ?? '',
+        deckName: rawP2Deck.deckName ?? 'Unknown Deck',
+      }
     : null;
 
   return {
@@ -152,13 +139,6 @@ function PrivateMatchLobbyPage() {
     {},
   );
 
-  // Chat
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [chatInput, setChatInput] = useState('');
-  const [chatSending, setChatSending] = useState(false);
-  const [chatError, setChatError] = useState<string | null>(null);
-  const chatScrollRef = useRef<HTMLDivElement | null>(null);
-
   // Track previous member UIDs so we can detect who just joined
   const prevMemberUidsRef = useRef<Set<string>>(new Set());
 
@@ -200,51 +180,12 @@ function PrivateMatchLobbyPage() {
     if (lobby.status === 'selecting-decks') {
       navigate(`/play/private/${lobby.id}/select-deck`);
     } else if (lobby.status === 'in-game') {
-      navigate(`/play/private/${lobby.id}/game`);
+      navigate(`/play/private/${lobby.id}/match`);
     } else if (lobby.status === 'closed') {
       setActiveLobbyId(null);
       navigate('/play');
     }
   }, [lobby, navigate, setActiveLobbyId]);
-
-  // Subscribe to chat messages
-  useEffect(() => {
-    if (!lobbyId) return;
-
-    const messagesRef = collection(db, 'lobbies', lobbyId, 'chat');
-    const q = query(messagesRef, orderBy('createdAt', 'asc'), limit(200));
-
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        const msgs: ChatMessage[] = snap.docs.map((d) => {
-          const data = d.data() as any;
-          return {
-            id: d.id,
-            uid: data.uid,
-            username: data.username,
-            role: data.role ?? 'spectator',
-            text: data.text,
-            createdAt: data.createdAt,
-            system: !!data.system,
-          };
-        });
-        setChatMessages(msgs);
-      },
-      (err) => {
-        console.error('[PrivateMatchLobby] Failed to subscribe to chat', err);
-      },
-    );
-
-    return () => unsub();
-  }, [lobbyId]);
-
-  // Auto-scroll chat to the latest message
-  useEffect(() => {
-    const el = chatScrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [chatMessages.length]);
 
   // If we’re no longer a member of the lobby, kick back to Play
   // BUT: the host is always considered a member even if they temporarily lose their seat.
@@ -425,7 +366,10 @@ function PrivateMatchLobbyPage() {
       if (uid === user.uid) return; // self handled elsewhere
 
       void leaveLobbyForUser(lobby.id, uid).catch((err) =>
-        console.error('[PrivateMatchLobby] Failed to clean offline member', err),
+        console.error(
+          '[PrivateMatchLobby] Failed to clean offline member',
+          err,
+        ),
       );
     });
   }, [memberStatuses, isHost, lobby, user]);
@@ -455,15 +399,18 @@ function PrivateMatchLobbyPage() {
         try {
           const messageRef = doc(messagesRef);
           await setDoc(messageRef, {
-            uid: m.uid,
-            username: m.username,
+            uid: user.uid, // host is author (matches rules)
+            username: lobby.hostUsername,
             role: 'spectator',
             text: `${m.username} joined the lobby.`,
             system: true,
             createdAt: serverTimestamp(),
           });
         } catch (err) {
-          console.error('[PrivateMatchLobby] failed to write join message', err);
+          console.error(
+            '[PrivateMatchLobby] failed to write join message',
+            err,
+          );
         }
       });
     }
@@ -612,31 +559,22 @@ function PrivateMatchLobbyPage() {
     lobby.p1 &&
     lobby.p2 &&
     lobby.p1Ready &&
-    lobby.p2Ready
+    lobby.p2Ready;
 
   const handleStartGame = async () => {
-    if (!lobby || !isP1) return
-    if (!canStartGame) return
+    if (!lobby || !isP1) return;
+    if (!canStartGame) return;
 
     try {
-      const lobbyRef = doc(db, 'lobbies', lobby.id)
+      const lobbyRef = doc(db, 'lobbies', lobby.id);
       await updateDoc(lobbyRef, {
         status: 'in-game',
         updatedAt: serverTimestamp(),
-      })
+      });
     } catch (err) {
-      console.error('[PrivateMatchLobby] failed to mark lobby in-game', err)
+      console.error('[PrivateMatchLobby] failed to mark lobby in-game', err);
     }
-  }
-
-  // When the lobby transitions to in-game, move everyone into the match view
-  useEffect(() => {
-    if (!lobby) return
-    if (lobby.status !== 'in-game') return
-
-    navigate(`/play/private/${lobby.id}/match`)
-  }, [lobby?.status, lobby?.id, navigate])
-
+  };
 
   // ---- Game rules (P1 controls) ----
 
@@ -666,54 +604,6 @@ function PrivateMatchLobbyPage() {
     } catch (err) {
       console.error('[PrivateMatchLobby] update sideboard failed', err);
     }
-  };
-
-  // ---- Chat ----
-
-  const handleSendChat = async () => {
-    if (!user || !profile || !lobby) return;
-    const text = chatInput.trim();
-    if (!text) return;
-
-    // Must be part of lobby
-    if (currentRole === 'none') {
-      setChatError('You must be in the lobby to chat.');
-      return;
-    }
-
-    setChatError(null);
-    setChatSending(true);
-    try {
-      const messagesRef = collection(db, 'lobbies', lobby.id, 'chat');
-      const messageRef = doc(messagesRef);
-      await setDoc(messageRef, {
-        uid: user.uid,
-        username: profile.username,
-        role: currentRole,
-        text,
-        system: false,
-        createdAt: serverTimestamp(),
-      });
-      setChatInput('');
-    } catch (err) {
-      console.error('[PrivateMatchLobby] send chat failed', err);
-      setChatError('Failed to send message.');
-    } finally {
-      setChatSending(false);
-    }
-  };
-
-  const handleChatKeyDown: React.KeyboardEventHandler<HTMLInputElement> = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      void handleSendChat();
-    }
-  };
-
-  const roleLabel = (msgRole: 'p1' | 'p2' | 'spectator') => {
-    if (msgRole === 'p1') return 'P1';
-    if (msgRole === 'p2') return 'P2';
-    return 'Spec';
   };
 
   // ---------- Render ----------
@@ -804,42 +694,69 @@ function PrivateMatchLobbyPage() {
         {/* Player slots */}
         <div className="grid gap-4 md:grid-cols-2">
           {/* P1 */}
-          <div className="flex flex-col rounded-xl border border-amber-500/40 bg-slate-900/70 p-4 shadow-md">
+          <div
+            className={`flex flex-col rounded-xl border p-4 shadow-md transition-colors ${
+              lobby.p1 && lobby.p1Ready
+                ? 'border-emerald-400 bg-emerald-500/90'
+                : 'border-amber-500/40 bg-slate-900/70'
+            }`}
+          >
             <div className="mb-2 flex items-center justify-between">
               <div className="text-xs font-semibold uppercase tracking-wide text-amber-300">
                 Player 1
               </div>
-              {lobby.p1 && (
-                <span className="text-[11px] text-slate-400">
-                  {lobby.p1Ready ? 'Ready' : 'Not ready'}
-                </span>
-              )}
             </div>
 
             <div className="flex flex-1 items-center justify-center">
               {lobby.p1 ? (
                 <div className="flex flex-col items-center gap-2">
-                  <div className="flex h-16 w-16 items-center justify-center rounded-full bg-amber-500 text-2xl font-bold text-slate-950">
+                  <div
+                    className={`flex h-16 w-16 items-center justify-center rounded-full text-2xl font-bold ${
+                      lobby.p1Ready
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-amber-500 text-slate-950'
+                    }`}
+                  >
                     {lobby.p1.username.charAt(0).toUpperCase()}
                   </div>
-                  <div className="text-sm font-semibold text-slate-100">
+                  <div
+                    className={`text-sm font-semibold ${
+                      lobby.p1Ready ? 'text-white' : 'text-slate-100'
+                    }`}
+                  >
                     {lobby.p1.username}
                   </div>
                   {lobby.p1.uid === user.uid && (
-                    <div className="text-[11px] text-emerald-300">You</div>
+                    <div
+                      className={`text-[11px] ${
+                        lobby.p1Ready ? 'text-emerald-100' : 'text-emerald-300'
+                      }`}
+                    >
+                      You
+                    </div>
                   )}
 
+                  {/* Ready / Not ready label under the name */}
+                  <div
+                    className={`mt-1 text-xs font-bold ${
+                      lobby.p1Ready ? 'text-white' : 'text-slate-400'
+                    }`}
+                  >
+                    {lobby.p1Ready ? 'Ready' : 'Not ready'}
+                  </div>
+
                   {isP1 && (
-                    <div className="mt-2 flex flex-wrap justify-center gap-2">
+                    <div className="mt-3 flex flex-wrap justify-center gap-2">
                       <button
                         type="button"
                         onClick={() => handleToggleReady('p1')}
-                        className={`rounded-md px-3 py-1 text-xs font-semibold shadow ${lobby.p1Ready
-                          ? 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'
-                          : 'bg-slate-800 text-slate-100 hover:bg-slate-700'
-                          }`}
+                        className={`rounded-md px-3 py-1 text-xs font-semibold shadow ${
+                          lobby.p1Ready
+                            ? 'bg-white/90 text-emerald-700 hover:bg-white'
+                            : 'bg-slate-800 text-slate-100 hover:bg-slate-700'
+                        }`}
                       >
-                        Ready
+                        {lobby.p1Ready ? 'Unready' : 'Ready'}
                       </button>
                     </div>
                   )}
@@ -868,42 +785,69 @@ function PrivateMatchLobbyPage() {
           </div>
 
           {/* P2 */}
-          <div className="flex flex-col rounded-xl border border-amber-500/40 bg-slate-900/70 p-4 shadow-md">
+          <div
+            className={`flex flex-col rounded-xl border p-4 shadow-md transition-colors ${
+              lobby.p2 && lobby.p2Ready
+                ? 'border-emerald-400 bg-emerald-500/90'
+                : 'border-amber-500/40 bg-slate-900/70'
+            }`}
+          >
             <div className="mb-2 flex items-center justify-between">
               <div className="text-xs font-semibold uppercase tracking-wide text-amber-300">
                 Player 2
               </div>
-              {lobby.p2 && (
-                <span className="text-[11px] text-slate-400">
-                  {lobby.p2Ready ? 'Ready' : 'Not ready'}
-                </span>
-              )}
             </div>
 
             <div className="flex flex-1 items-center justify-center">
               {lobby.p2 ? (
                 <div className="flex flex-col items-center gap-2">
-                  <div className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-700 text-2xl font-bold text-amber-200">
+                  <div
+                    className={`flex h-16 w-16 items-center justify-center rounded-full text-2xl font-bold ${
+                      lobby.p2Ready
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-700 text-amber-200'
+                    }`}
+                  >
                     {lobby.p2.username.charAt(0).toUpperCase()}
                   </div>
-                  <div className="text-sm font-semibold text-slate-100">
+                  <div
+                    className={`text-sm font-semibold ${
+                      lobby.p2Ready ? 'text-white' : 'text-slate-100'
+                    }`}
+                  >
                     {lobby.p2.username}
                   </div>
                   {lobby.p2.uid === user.uid && (
-                    <div className="text-[11px] text-emerald-300">You</div>
+                    <div
+                      className={`text-[11px] ${
+                        lobby.p2Ready ? 'text-emerald-100' : 'text-emerald-300'
+                      }`}
+                    >
+                      You
+                    </div>
                   )}
 
+                  {/* Ready / Not ready label under the name */}
+                  <div
+                    className={`mt-1 text-xs font-bold ${
+                      lobby.p2Ready ? 'text-white' : 'text-slate-400'
+                    }`}
+                  >
+                    {lobby.p2Ready ? 'Ready' : 'Not ready'}
+                  </div>
+
                   {isP2 && (
-                    <div className="mt-2 flex flex-wrap justify-center gap-2">
+                    <div className="mt-3 flex flex-wrap justify-center gap-2">
                       <button
                         type="button"
                         onClick={() => handleToggleReady('p2')}
-                        className={`rounded-md px-3 py-1 text-xs font-semibold shadow ${lobby.p2Ready
-                          ? 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'
-                          : 'bg-slate-800 text-slate-100 hover:bg-slate-700'
-                          }`}
+                        className={`rounded-md px-3 py-1 text-xs font-semibold shadow ${
+                          lobby.p2Ready
+                            ? 'bg-white/90 text-emerald-700 hover:bg-white'
+                            : 'bg-slate-800 text-slate-100 hover:bg-slate-700'
+                        }`}
                       >
-                        Ready
+                        {lobby.p2Ready ? 'Unready' : 'Ready'}
                       </button>
                     </div>
                   )}
@@ -934,72 +878,13 @@ function PrivateMatchLobbyPage() {
 
         {/* Chat + Start Game / Rules row */}
         <div className="flex flex-col gap-4 md:flex-row">
-          {/* Chat box */}
-          <div className="flex flex-1 flex-col rounded-xl border border-amber-500/40 bg-slate-900/70 p-4 shadow-md">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-300">
-              Lobby Chat
-            </div>
-
-            <div
-              ref={chatScrollRef}
-              className="mb-3 h-40 overflow-y-auto rounded-md border border-slate-800 bg-slate-950/70 px-3 py-2 text-sm"
-            >
-              {chatMessages.length === 0 ? (
-                <div className="text-xs text-slate-500">
-                  No messages yet. Say hello!
-                </div>
-              ) : (
-                <ul className="space-y-1">
-                  {chatMessages.map((m) => (
-                    <li key={m.id}>
-                      {m.system ? (
-                        <span className="text-xs italic text-slate-400">
-                          {m.text}
-                        </span>
-                      ) : (
-                        <>
-                          <span className="font-semibold text-amber-200">
-                            {m.username}
-                          </span>
-                          <span className="text-[10px] text-slate-400">
-                            {' '}
-                            [{roleLabel(m.role)}]
-                          </span>
-                          <span className="text-amber-100">: </span>
-                          <span className="text-slate-100">{m.text}</span>
-                        </>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-
-            {chatError && (
-              <div className="mb-2 rounded border border-red-500/60 bg-red-950/60 px-2 py-1 text-[11px] text-red-200">
-                {chatError}
-              </div>
-            )}
-
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                onKeyDown={handleChatKeyDown}
-                placeholder="Type a message..."
-                className="flex-1 rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 focus:border-amber-500 focus:outline-none"
-              />
-              <button
-                type="button"
-                disabled={chatSending || !chatInput.trim() || currentRole === 'none'}
-                onClick={handleSendChat}
-                className="inline-flex items-center justify-center rounded-md bg-amber-500 px-3 py-2 text-xs font-semibold text-slate-950 shadow hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Send
-              </button>
-            </div>
-          </div>
+          <ChatBox
+            lobbyId={lobby.id}
+            currentRole={currentRole}
+            userUid={user.uid}
+            username={profile.username}
+            title="Lobby Chat"
+          />
 
           {/* Start game + rules column */}
           <div className="flex w-full flex-col gap-3 md:w-64 lg:w-80">
@@ -1008,10 +893,11 @@ function PrivateMatchLobbyPage() {
                 type="button"
                 disabled={!canStartGame}
                 onClick={handleStartGame}
-                className={`inline-flex w-full items-center justify-center rounded-md px-4 py-2 text-sm font-semibold shadow ${canStartGame
-                  ? 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'
-                  : 'cursor-not-allowed bg-slate-800 text-slate-500'
-                  }`}
+                className={`inline-flex w-full items-center justify-center rounded-md px-4 py-2 text-sm font-semibold shadow ${
+                  canStartGame
+                    ? 'bg-emerald-500 text-slate-950 hover:bg-emerald-400'
+                    : 'cursor-not-allowed bg-slate-800 text-slate-500'
+                }`}
               >
                 Start Game
               </button>
@@ -1068,7 +954,9 @@ function PrivateMatchLobbyPage() {
                     <input
                       type="checkbox"
                       checked={lobby.rules.sideboard}
-                      onChange={(e) => handleSideboardChange(e.target.checked)}
+                      onChange={(e) =>
+                        handleSideboardChange(e.target.checked)
+                      }
                       disabled={!canEditRules}
                       className="h-3 w-3 accent-amber-500"
                     />
@@ -1245,7 +1133,9 @@ function PrivateMatchLobbyPage() {
               <button
                 type="button"
                 disabled={
-                  sendingInvites || selectedFriendIds.size === 0 || friendsLoading
+                  sendingInvites ||
+                  selectedFriendIds.size === 0 ||
+                  friendsLoading
                 }
                 onClick={handleSendInvites}
                 className="rounded-md bg-amber-500 px-4 py-1.5 text-xs font-semibold text-slate-950 shadow hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"

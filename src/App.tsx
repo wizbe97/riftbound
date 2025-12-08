@@ -11,15 +11,18 @@ import CardGalleryPage from './pages/CardGalleryPage';
 import CreateDeckPage from './pages/CreateDeckPage';
 import DeckDetailPage from './pages/DeckDetailPage';
 import MatchGamePage from './pages/MatchGamePage';
+import MatchDeckSelectPage from './pages/MatchDeckSelectPage';
 import { useAuth } from './contexts/AuthContext';
 
 function AppLayout() {
   const { user } = useAuth();
   const location = useLocation();
 
+  // Treat the full-screen match playmat as the "match route"
   const isMatchRoute =
     location.pathname.startsWith('/play/private/') &&
-    location.pathname.endsWith('/match');
+    (location.pathname.endsWith('/game') ||
+      location.pathname.endsWith('/match'));
 
   const mainWrapperClass = isMatchRoute
     ? // Full width under navbar for the match view
@@ -37,14 +40,34 @@ function AppLayout() {
             <Routes>
               <Route path="/" element={<HomePage />} />
               <Route path="/play" element={<PlayPage />} />
+
+              {/* Private match flow */}
               <Route
                 path="/play/private/:lobbyId"
                 element={<PrivateMatchLobbyPage />}
+              />
+
+              {/* Optional direct deck-select page */}
+              <Route
+                path="/play/private/:lobbyId/decks"
+                element={<MatchDeckSelectPage />}
+              />
+              <Route
+                path="/play/private/:lobbyId/select-deck"
+                element={<MatchDeckSelectPage />}
+              />
+
+              {/* Match board routes */}
+              <Route
+                path="/play/private/:lobbyId/game"
+                element={<MatchGamePage />}
               />
               <Route
                 path="/play/private/:lobbyId/match"
                 element={<MatchGamePage />}
               />
+
+              {/* Decks */}
               <Route path="/decks" element={<DecksPage />} />
               <Route path="/decks/create" element={<CreateDeckPage />} />
               <Route path="/decks/:deckId" element={<DeckDetailPage />} />
@@ -52,16 +75,19 @@ function AppLayout() {
                 path="/decks/:deckId/edit"
                 element={<CreateDeckPage />}
               />
+
+              {/* Other pages */}
               <Route path="/cards" element={<CardGalleryPage />} />
               <Route path="/rules" element={<RulesPage />} />
               <Route path="/profile" element={<ProfilePage />} />
+
               {/* TODO: 404 page later */}
             </Routes>
           </div>
         </main>
       </div>
 
-      {/* Right side: friends sidebar (visible when logged in, but not during a match) */}
+      {/* Right side: friends sidebar (visible when logged in, but not during a match playmat) */}
       {user && !isMatchRoute && <FriendsSidebar />}
     </div>
   );
