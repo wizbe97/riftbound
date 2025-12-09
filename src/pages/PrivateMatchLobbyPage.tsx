@@ -880,10 +880,13 @@ function PrivateMatchLobbyPage() {
         <div className="flex flex-col gap-4 md:flex-row">
           <ChatBox
             lobbyId={lobby.id}
-            currentRole={currentRole}
+            // coerce to a valid ChatRole; if 'none', show as spectator, but:
+            currentRole={currentRole === 'none' ? 'spectator' : currentRole}
             userUid={user.uid}
             username={profile.username}
             title="Lobby Chat"
+            // if you're not in the lobby at all, you can't chat
+            canChat={currentRole !== 'none'}
           />
 
           {/* Start game + rules column */}

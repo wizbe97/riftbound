@@ -71,6 +71,8 @@ type DeckSummary = {
   id: string;
   name: string;
   legendCardId?: string | null;
+  championCardId?: string | null;
+  cardCount: number;
 };
 
 function mapLobby(id: string, data: DocumentData): Lobby {
@@ -162,7 +164,10 @@ function MatchDeckSelectPage() {
         setActiveLobbyId(snap.id);
       },
       (err) => {
-        console.error('[MatchDeckSelectPage] Failed to subscribe to lobby', err);
+        console.error(
+          '[MatchDeckSelectPage] Failed to subscribe to lobby',
+          err,
+        );
         setLoadingLobby(false);
       },
     );
@@ -202,10 +207,16 @@ function MatchDeckSelectPage() {
       (snap) => {
         const list: DeckSummary[] = snap.docs.map((d) => {
           const data = d.data() as DeckDoc;
+          const cardCount = (data.cards ?? []).reduce(
+            (sum, c) => sum + (c.quantity ?? 0),
+            0,
+          );
           return {
             id: d.id,
             name: data.name ?? 'Untitled Deck',
             legendCardId: data.legendCardId ?? null,
+            championCardId: data.championCardId ?? null,
+            cardCount,
           };
         });
         setDecks(list);
@@ -219,6 +230,13 @@ function MatchDeckSelectPage() {
 
     return () => unsub();
   }, [user]);
+
+  // Auto-select first deck in the list
+  useEffect(() => {
+    if (!loadingDecks && decks.length > 0 && !selectedDeckId) {
+      setSelectedDeckId(decks[0].id);
+    }
+  }, [loadingDecks, decks, selectedDeckId]);
 
   // Auto-progress to game once both decks set (host only updates status)
   useEffect(() => {
@@ -266,10 +284,14 @@ function MatchDeckSelectPage() {
   const isP2 = lobby.p2 && lobby.p2.uid === user.uid;
   const isPlayer = isP1 || isP2;
 
-  // If not a player, just watch
   const mySeatLabel = isP1 ? 'Player 1' : isP2 ? 'Player 2' : 'Spectator';
-
   const myCurrentDeck = isP1 ? lobby.p1Deck : isP2 ? lobby.p2Deck : null;
+
+  const opponentHasDeck =
+    isP1 ? !!lobby.p2Deck : isP2 ? !!lobby.p1Deck : false;
+  const iHaveConfirmed = !!myCurrentDeck;
+  const waitingForOpponent =
+    isPlayer && iHaveConfirmed && !opponentHasDeck;
 
   const handleConfirmDeck = async () => {
     if (!user || !lobby) return;
@@ -335,8 +357,8 @@ function MatchDeckSelectPage() {
           </p>
           <p className="mt-1 text-[11px] text-slate-400">
             You are{' '}
-            <span className="font-semibold text-amber-200">{mySeatLabel}</span>
-            . Each player picks a deck, then the game will start on the playmat.
+            <span className="font-semibold text-amber-200">{mySeatLabel}</span>.
+            Each player picks a deck, then the game will start on the playmat.
           </p>
         </div>
       </div>
@@ -344,7 +366,8 @@ function MatchDeckSelectPage() {
       {/* If spectator, show readonly state */}
       {!isPlayer && (
         <div className="rounded-xl border border-amber-500/40 bg-slate-900/70 p-4 text-sm text-slate-200">
-          You&apos;re spectating this match. Waiting for players to choose decks…
+          You&apos;re spectating this match. Waiting for players to choose
+          decks…
         </div>
       )}
 
@@ -373,10 +396,25 @@ function MatchDeckSelectPage() {
                     key={deck.id}
                     className={`flex cursor-pointer items-center justify-between gap-3 py-2 ${
                       isSelected ? 'bg-slate-900/90' : 'hover:bg-slate-900/80'
+                    } ${
+                      !isPlayer || iHaveConfirmed
+                        ? 'cursor-default opacity-75'
+                        : ''
                     }`}
-                    onClick={() => isPlayer && setSelectedDeckId(deck.id)}
+                    onClick={() =>
+                      isPlayer &&
+                      !iHaveConfirmed &&
+                      setSelectedDeckId(deck.id)
+                    }
                   >
                     <div className="flex items-center gap-3">
+                      {/* pip */}
+                      <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border border-slate-400">
+                        {isSelected && (
+                          <span className="h-3 w-3 rounded-full bg-emerald-400" />
+                        )}
+                      </span>
+
                       <div className="h-14 w-10 flex-shrink-0">
                         {legendCard ? (
                           <img
@@ -392,29 +430,11 @@ function MatchDeckSelectPage() {
                       </div>
                       <div>
                         <div className="text-slate-100">{deck.name}</div>
-                        {legendCard && (
-                          <div className="text-[11px] text-slate-400">
-                            Legend:{' '}
-                            <span className="text-amber-200">
-                              {legendCard.name}
-                            </span>
-                          </div>
-                        )}
+                        <div className="text-[11px] text-slate-400">
+                          {deck.cardCount} cards
+                        </div>
                       </div>
                     </div>
-                    {isPlayer && (
-                      <div className="flex-shrink-0">
-                        <span
-                          className={`rounded-md px-2 py-1 text-[11px] font-semibold ${
-                            isSelected
-                              ? 'bg-amber-500 text-slate-950'
-                              : 'border border-slate-700 text-slate-200'
-                          }`}
-                        >
-                          {isSelected ? 'Selected' : 'Select'}
-                        </span>
-                      </div>
-                    )}
                   </li>
                 );
               })}
@@ -430,25 +450,34 @@ function MatchDeckSelectPage() {
               )}
               <button
                 type="button"
-                disabled={confirming || !selectedDeckId}
+                disabled={
+                  confirming ||
+                  !selectedDeckId ||
+                  waitingForOpponent ||
+                  iHaveConfirmed
+                }
                 onClick={handleConfirmDeck}
                 className="mt-3 inline-flex w-full items-center justify-center rounded-md bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 shadow hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {confirming ? 'Confirming…' : 'Confirm Deck'}
+                {waitingForOpponent
+                  ? "Awaiting other player's selection…"
+                  : confirming
+                  ? 'Confirming…'
+                  : iHaveConfirmed
+                  ? 'Deck Confirmed'
+                  : 'Confirm Deck'}
               </button>
-              {myCurrentDeck && (
+              {iHaveConfirmed && (
                 <p className="mt-2 text-[11px] text-slate-400">
-                  Current selection:{' '}
-                  <span className="font-semibold text-emerald-200">
-                    {myCurrentDeck.deckName}
-                  </span>
+                  Your deck is locked in. Waiting for the other player to
+                  confirm theirs…
                 </p>
               )}
             </>
           )}
         </div>
 
-        {/* Overall status */}
+        {/* Overall status – no deck names, just ready state */}
         <div className="space-y-4">
           <div className="rounded-xl border border-amber-500/40 bg-slate-900/70 p-4 shadow-md text-sm text-slate-100">
             <h2 className="mb-2 text-lg font-semibold text-amber-200">
@@ -458,20 +487,16 @@ function MatchDeckSelectPage() {
             <ul className="space-y-2 text-xs">
               <li>
                 <span className="font-semibold text-amber-200">Player 1</span> –{' '}
-                {lobby.p1 ? lobby.p1.username : 'Empty slot'}
+                {lobby.p1 ? lobby.p1.username : 'Empty slot'}{' '}
                 {lobby.p1Deck && (
-                  <span className="block text-[11px] text-emerald-200">
-                    Deck: {lobby.p1Deck.deckName}
-                  </span>
+                  <span className="text-emerald-300">· ready</span>
                 )}
               </li>
               <li>
                 <span className="font-semibold text-amber-200">Player 2</span> –{' '}
-                {lobby.p2 ? lobby.p2.username : 'Empty slot'}
+                {lobby.p2 ? lobby.p2.username : 'Empty slot'}{' '}
                 {lobby.p2Deck && (
-                  <span className="block text-[11px] text-emerald-200">
-                    Deck: {lobby.p2Deck.deckName}
-                  </span>
+                  <span className="text-emerald-300">· ready</span>
                 )}
               </li>
             </ul>
@@ -490,8 +515,9 @@ function MatchDeckSelectPage() {
 export default MatchDeckSelectPage;
 
 /**
- * Overlay version of the same UI to render on top of the match board.
- * Uses the same layout/markup, just driven by a passed-in lobby.
+ * Overlay version of the deck select UI, rendered on top of the playmat.
+ * Small centred popup, auto-selects first deck, shows "awaiting other player"
+ * and does NOT reveal which deck each player picked.
  */
 export function MatchDeckSelectOverlay({ lobby }: { lobby: Lobby }) {
   const { user } = useAuth();
@@ -529,10 +555,16 @@ export function MatchDeckSelectOverlay({ lobby }: { lobby: Lobby }) {
       (snap) => {
         const list: DeckSummary[] = snap.docs.map((d) => {
           const data = d.data() as DeckDoc;
+          const cardCount = (data.cards ?? []).reduce(
+            (sum, c) => sum + (c.quantity ?? 0),
+            0,
+          );
           return {
             id: d.id,
             name: data.name ?? 'Untitled Deck',
             legendCardId: data.legendCardId ?? null,
+            championCardId: data.championCardId ?? null,
+            cardCount,
           };
         });
         setDecks(list);
@@ -546,6 +578,13 @@ export function MatchDeckSelectOverlay({ lobby }: { lobby: Lobby }) {
 
     return () => unsub();
   }, [user]);
+
+  // Auto-select first deck
+  useEffect(() => {
+    if (!loadingDecks && decks.length > 0 && !selectedDeckId) {
+      setSelectedDeckId(decks[0].id);
+    }
+  }, [loadingDecks, decks, selectedDeckId]);
 
   if (!user) {
     return (
@@ -564,9 +603,14 @@ export function MatchDeckSelectOverlay({ lobby }: { lobby: Lobby }) {
   const mySeatLabel = isP1 ? 'Player 1' : isP2 ? 'Player 2' : 'Spectator';
   const myCurrentDeck = isP1 ? lobby.p1Deck : isP2 ? lobby.p2Deck : null;
 
+  const opponentHasDeck =
+    isP1 ? !!lobby.p2Deck : isP2 ? !!lobby.p1Deck : false;
+  const iHaveConfirmed = !!myCurrentDeck;
+  const waitingForOpponent =
+    isPlayer && iHaveConfirmed && !opponentHasDeck;
+
   const handleConfirmDeck = async () => {
-    if (!user || !lobby) return;
-    if (!isPlayer) return;
+    if (!user || !lobby || !isPlayer) return;
 
     if (!selectedDeckId) {
       setError('Select a deck first.');
@@ -608,173 +652,199 @@ export function MatchDeckSelectOverlay({ lobby }: { lobby: Lobby }) {
 
   return (
     <section className="space-y-4">
-      {/* Header */}
-      <div className="flex items-center gap-3">
+      {/* Compact header */}
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-amber-300">
+            Choose your deck
+          </h1>
+          <p className="mt-1 text-[11px] text-slate-400">
+            Select one of your decks to use for this match. You can&apos;t
+            change it once the game begins.
+          </p>
+          <p className="mt-1 text-[11px] text-slate-500">
+            You are{' '}
+            <span className="font-semibold text-amber-200">
+              {mySeatLabel}
+            </span>{' '}
+            · {lobby.p1?.username ?? 'Player 1'} vs{' '}
+            {lobby.p2?.username ?? 'Player 2'}
+          </p>
+        </div>
         <button
           type="button"
           onClick={handleBackToLobby}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-700 bg-slate-900/80 text-sm text-slate-100 hover:border-amber-400 hover:text-amber-200"
+          className="inline-flex h-8 items-center justify-center rounded-full border border-slate-700 bg-slate-900/80 px-3 text-[11px] text-slate-100 hover:border-amber-400 hover:text-amber-200"
         >
-          ←
+          Back to Lobby
         </button>
-        <div className="flex-1">
-          <h1 className="text-2xl font-semibold text-amber-300">
-            Choose Your Deck
-          </h1>
-          <p className="text-xs text-slate-400">
-            {lobby.p1?.username ?? 'Player 1'} vs{' '}
-            {lobby.p2?.username ?? 'Player 2'} • Best of {lobby.rules.bestOf}
-            {lobby.rules.sideboard ? ' with sideboard' : ''}
-          </p>
-          <p className="mt-1 text-[11px] text-slate-400">
-            You are{' '}
-            <span className="font-semibold text-amber-200">{mySeatLabel}</span>
-            . Each player picks a deck, then the game will start on the playmat.
-          </p>
-        </div>
       </div>
 
-      {/* If spectator, show readonly state */}
       {!isPlayer && (
-        <div className="rounded-xl border border-amber-500/40 bg-slate-900/70 p-4 text-sm text-slate-200">
-          You&apos;re spectating this match. Waiting for players to choose decks…
+        <div className="rounded-lg border border-amber-500/30 bg-slate-900/70 p-3 text-[12px] text-slate-200">
+          You&apos;re spectating this match. Waiting for players to choose
+          decks…
         </div>
       )}
 
-      <div className="grid gap-4 md:grid-cols-[2fr,3fr]">
-        {/* Your deck selection */}
-        <div className="rounded-xl border border-amber-500/40 bg-slate-900/70 p-4 shadow-md">
-          <h2 className="mb-2 text-lg font-semibold text-amber-200">
-            {isPlayer ? 'Your Decks' : 'Player Decks'}
-          </h2>
+      {/* Deck list: pip + legend + champ + name + card count */}
+      <div className="space-y-3">
+        {loadingDecks ? (
+          <p className="text-sm text-slate-300">Loading your decks…</p>
+        ) : decks.length === 0 ? (
+          <p className="text-sm text-slate-300">
+            You don&apos;t have any decks yet. Create one on the Decks page.
+          </p>
+        ) : (
+          <ul className="space-y-2 text-sm">
+            {decks.map((deck) => {
+              const isSelected = deck.id === selectedDeckId;
+              const legendCard =
+                deck.legendCardId && cardById.get(deck.legendCardId);
+              const championCard =
+                deck.championCardId && cardById.get(deck.championCardId);
 
-          {loadingDecks ? (
-            <p className="text-sm text-slate-300">Loading your decks…</p>
-          ) : decks.length === 0 ? (
-            <p className="text-sm text-slate-300">
-              You don&apos;t have any decks yet. Create one on the Decks page.
-            </p>
-          ) : (
-            <ul className="divide-y divide-slate-800 text-sm">
-              {decks.map((deck) => {
-                const isSelected = deck.id === selectedDeckId;
-                const legendCard =
-                  deck.legendCardId && cardById.get(deck.legendCardId);
-
-                return (
-                  <li
-                    key={deck.id}
-                    className={`flex cursor-pointer items-center justify-between gap-3 py-2 ${
-                      isSelected ? 'bg-slate-900/90' : 'hover:bg-slate-900/80'
+              return (
+                <li key={deck.id} className="py-0.5">
+                  <button
+                    type="button"
+                    disabled={!isPlayer || iHaveConfirmed}
+                    onClick={() =>
+                      isPlayer && !iHaveConfirmed && setSelectedDeckId(deck.id)
+                    }
+                    className={`flex w-full items-center gap-4 rounded-lg border px-4 py-3 text-left transition ${
+                      isSelected
+                        ? 'border-amber-400 bg-slate-900/90 shadow-md'
+                        : 'border-slate-700/70 bg-slate-900/80 hover:border-amber-400/70 hover:bg-slate-900'
+                    } ${
+                      !isPlayer || iHaveConfirmed
+                        ? 'cursor-default opacity-75'
+                        : ''
                     }`}
-                    onClick={() => isPlayer && setSelectedDeckId(deck.id)}
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="h-14 w-10 flex-shrink-0">
+                    {/* Pip */}
+                    <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border border-slate-400">
+                      {isSelected && (
+                        <span className="h-3 w-3 rounded-full bg-emerald-400" />
+                      )}
+                    </span>
+
+                    {/* Legend / Champ thumbnails */}
+                    <div className="flex items-center gap-2">
+                      <div className="flex flex-col items-center gap-1">
                         {legendCard ? (
                           <img
                             src={legendCard.images.small}
                             alt={legendCard.name}
-                            className="h-14 w-auto rounded-md border border-amber-500/60 bg-slate-950 object-cover"
+                            className="h-14 w-10 rounded-md border border-amber-500/60 bg-slate-950 object-cover"
                           />
                         ) : (
                           <div className="flex h-14 w-10 items-center justify-center rounded-md border border-slate-700 bg-slate-900 text-[10px] text-slate-400">
-                            No Legend
+                            —
                           </div>
                         )}
-                      </div>
-                      <div>
-                        <div className="text-slate-100">{deck.name}</div>
-                        {legendCard && (
-                          <div className="text-[11px] text-slate-400">
-                            Legend:{' '}
-                            <span className="text-amber-200">
-                              {legendCard.name}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    {isPlayer && (
-                      <div className="flex-shrink-0">
-                        <span
-                          className={`rounded-md px-2 py-1 text-[11px] font-semibold ${
-                            isSelected
-                              ? 'bg-amber-500 text-slate-950'
-                              : 'border border-slate-700 text-slate-200'
-                          }`}
-                        >
-                          {isSelected ? 'Selected' : 'Select'}
+                        <span className="text-[9px] uppercase tracking-wide text-slate-400">
+                          Legend
                         </span>
                       </div>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
+
+                      <div className="flex flex-col items-center gap-1">
+                        {championCard ? (
+                          <img
+                            src={championCard.images.small}
+                            alt={championCard.name}
+                            className="h-14 w-10 rounded-md border border-amber-500/60 bg-slate-950 object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-14 w-10 items-center justify-center rounded-md border border-slate-700 bg-slate-900 text-[10px] text-slate-400">
+                            —
+                          </div>
+                        )}
+                        <span className="text-[9px] uppercase tracking-wide text-slate-400">
+                          Champion
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Deck text */}
+                    <div className="ml-2">
+                      <div className="text-sm font-semibold text-slate-100">
+                        {deck.name}
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        {deck.cardCount} cards
+                      </div>
+                    </div>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      {isPlayer && (
+        <>
+          {error && (
+            <div className="mt-1 rounded border border-red-500/60 bg-red-950/60 px-3 py-1.5 text-xs text-red-200">
+              {error}
+            </div>
           )}
 
-          {isPlayer && (
-            <>
-              {error && (
-                <div className="mt-3 rounded border border-red-500/60 bg-red-950/60 px-3 py-1.5 text-xs text-red-200">
-                  {error}
-                </div>
-              )}
-              <button
-                type="button"
-                disabled={confirming || !selectedDeckId}
-                onClick={handleConfirmDeck}
-                className="mt-3 inline-flex w-full items-center justify-center rounded-md bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-950 shadow hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {confirming ? 'Confirming…' : 'Confirm Deck'}
-              </button>
-              {myCurrentDeck && (
-                <p className="mt-2 text-[11px] text-slate-400">
-                  Current selection:{' '}
-                  <span className="font-semibold text-emerald-200">
-                    {myCurrentDeck.deckName}
-                  </span>
-                </p>
-              )}
-            </>
-          )}
-        </div>
-
-        {/* Overall status */}
-        <div className="space-y-4">
-          <div className="rounded-xl border border-amber-500/40 bg-slate-900/70 p-4 shadow-md text-sm text-slate-100">
-            <h2 className="mb-2 text-lg font-semibold text-amber-200">
-              Match Status
-            </h2>
-
-            <ul className="space-y-2 text-xs">
-              <li>
-                <span className="font-semibold text-amber-200">Player 1</span> –{' '}
-                {lobby.p1 ? lobby.p1.username : 'Empty slot'}
-                {lobby.p1Deck && (
-                  <span className="block text-[11px] text-emerald-200">
-                    Deck: {lobby.p1Deck.deckName}
-                  </span>
-                )}
-              </li>
-              <li>
-                <span className="font-semibold text-amber-200">Player 2</span> –{' '}
-                {lobby.p2 ? lobby.p2.username : 'Empty slot'}
-                {lobby.p2Deck && (
-                  <span className="block text-[11px] text-emerald-200">
-                    Deck: {lobby.p2Deck.deckName}
-                  </span>
-                )}
-              </li>
-            </ul>
-
-            <p className="mt-3 text-[11px] text-slate-400">
-              The game will automatically start once both players have confirmed
-              their decks.
-            </p>
+          <div className="mt-3 flex justify-end gap-3">
+            <button
+              type="button"
+              disabled
+              className="inline-flex items-center justify-center rounded-md border border-transparent px-3 py-2 text-[11px] text-slate-500"
+            >
+              {waitingForOpponent
+                ? 'Your deck is locked in.'
+                : iHaveConfirmed
+                ? 'Deck confirmed.'
+                : ''}
+            </button>
+            <button
+              type="button"
+              disabled={
+                confirming ||
+                !selectedDeckId ||
+                waitingForOpponent ||
+                iHaveConfirmed
+              }
+              onClick={handleConfirmDeck}
+              className="inline-flex items-center justify-center rounded-md bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 shadow hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {waitingForOpponent
+                ? "Awaiting other player's selection…"
+                : confirming
+                ? 'Confirming…'
+                : iHaveConfirmed
+                ? 'Deck Confirmed'
+                : 'Confirm Deck'}
+            </button>
           </div>
+        </>
+      )}
+
+      {/* Tiny match status, without deck names */}
+      <div className="mt-4 rounded-lg border border-amber-500/30 bg-slate-900/80 p-3 text-[11px] text-slate-200">
+        <div className="mb-1 font-semibold text-amber-200">
+          Match Status
         </div>
+        <ul className="space-y-1">
+          <li>
+            Player 1 – {lobby.p1 ? lobby.p1.username : 'Empty slot'}{' '}
+            {lobby.p1Deck && (
+              <span className="text-emerald-300">· ready</span>
+            )}
+          </li>
+          <li>
+            Player 2 – {lobby.p2 ? lobby.p2.username : 'Empty slot'}{' '}
+            {lobby.p2Deck && (
+              <span className="text-emerald-300">· ready</span>
+            )}
+          </li>
+        </ul>
       </div>
     </section>
   );

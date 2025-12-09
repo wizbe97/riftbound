@@ -175,10 +175,38 @@ export type RiftboundCardKind = 'rune' | 'battlefield' | 'other'
 
 /**
  * High-level classification of card kind, derived from naming/OGN.
- * This does not change any existing behaviour; it's just a helper.
  */
 export function getCardKind(card: RiftboundCard): RiftboundCardKind {
   if (isRuneCard(card)) return 'rune'
   if (isBattlefieldCard(card)) return 'battlefield'
   return 'other'
+}
+
+// ---------- Deck-aware card type helpers ----------
+
+export type RiftboundDeckCardType =
+  | 'legend'
+  | 'chosenChampion'
+  | 'rune'
+  | 'battlefield'
+  | 'mainDeck'
+
+/**
+ * Deck-aware classification for a card:
+ * - if its id matches the deck's legendCardId -> 'legend'
+ * - else if it matches championCardId       -> 'chosenChampion'
+ * - else if it's a rune card                -> 'rune'
+ * - else if it's a battlefield card         -> 'battlefield'
+ * - otherwise                               -> 'mainDeck'
+ */
+export function getDeckCardType(
+  card: RiftboundCard,
+  legendCardId?: string | null,
+  championCardId?: string | null,
+): RiftboundDeckCardType {
+  if (legendCardId && card.id === legendCardId) return 'legend'
+  if (championCardId && card.id === championCardId) return 'chosenChampion'
+  if (isRuneCard(card)) return 'rune'
+  if (isBattlefieldCard(card)) return 'battlefield'
+  return 'mainDeck'
 }
