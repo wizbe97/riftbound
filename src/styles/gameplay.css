@@ -32,13 +32,114 @@
   }
 }
 
+/* Rectangular zones (battle lanes, base, rune channel, hand) */
 .rb-zone-rect {
   height: var(--rb-card-height);
 }
 
+/* Card zones (deck, discard, legend, champion, rune pile slot, etc.) */
 .rb-zone-card-slot-inner {
+  position: relative;
   height: var(--rb-card-height);
   width: var(--rb-card-width);
   min-width: var(--rb-card-width);
   max-width: var(--rb-card-width);
+}
+
+/* Generic card image (legend, champion, etc.) */
+.rb-card-image {
+  width: 100%;
+  height: 100%;
+  border-radius: 0.45rem;
+  object-fit: cover;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+  transition: transform 120ms ease-out;
+}
+
+/* Pile container for decks / rune piles (back-of-card image + count text) */
+.rb-pile-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+/* Pile card-back image */
+.rb-pile-image {
+  width: 100%;
+  height: 100%;
+  border-radius: 0.45rem;
+  object-fit: cover;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+}
+
+/* Centered count overlay on piles (e.g. "12") */
+.rb-pile-count {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 1.4rem;
+  color: #ffffff;
+  text-shadow:
+    0 0 4px rgba(0, 0, 0, 0.9),
+    0 0 8px rgba(0, 0, 0, 0.75);
+  pointer-events: none;
+}
+
+/* Optional tiny label in the top-left of each zone */
+.rb-zone-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* ========================= */
+/* Card interaction + preview */
+/* ========================= */
+
+.rb-card-interaction {
+  width: 100%;
+  height: 100%;
+}
+
+/* “Fist” cursor – using grab/hand style */
+.rb-card-interaction:hover {
+  cursor: grab;
+}
+
+/* Slight grow on hover (card in the zone) */
+.rb-card-interaction:hover .rb-card-image {
+  transform: scale(1.08);
+}
+
+/* Floating preview container positioned via inline top/left */
+.rb-card-preview {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none; /* purely visual */
+}
+
+/* Inner wrapper so we can constrain size and add border/background */
+.rb-card-preview-inner {
+  max-height: 90vh;
+  max-width: 22vw;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(251, 191, 36, 0.8); /* amber-400-ish */
+  background: rgba(15, 23, 42, 0.95); /* slate-900-ish */
+  padding: 0.35rem;
+  box-shadow:
+    0 10px 30px rgba(0, 0, 0, 0.9),
+    0 0 18px rgba(251, 191, 36, 0.3);
+}
+
+/* Preview image itself */
+.rb-card-preview-image {
+  display: block;
+  max-height: 86vh;
+  max-width: 21vw;
+  height: auto;
+  width: auto;
+  border-radius: 0.65rem;
 }
