@@ -1,5 +1,11 @@
 import type React from 'react';
-import { useEffect, useState, useCallback, useRef } from 'react';
+import {
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+} from 'react';
+import { createPortal } from 'react-dom';
 import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import type { RiftboundCard } from '../data/riftboundCards';
@@ -58,7 +64,10 @@ export function CardInteraction({
   overlay,
 }: CardInteractionProps) {
   const [isHovered, setIsHovered] = useState(false);
-  const [previewPos, setPreviewPos] = useState<PreviewPos>({ top: 0, left: 0 });
+  const [previewPos, setPreviewPos] = useState<PreviewPos>({
+    top: 0,
+    left: 0,
+  });
   const [rotation, setRotation] = useState<number>(0);
   const [menu, setMenu] = useState<ContextMenuState>({
     visible: false,
@@ -127,8 +136,9 @@ export function CardInteraction({
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
 
-    const PREVIEW_WIDTH = 260;
-    const PREVIEW_HEIGHT = 420;
+    // Match CSS max sizes so the math is consistent with actual preview size
+    const PREVIEW_WIDTH = viewportWidth * 0.18; // 18vw
+    const PREVIEW_HEIGHT = viewportHeight * 0.7; // 70vh
     const MARGIN = 16;
 
     const cardCenterX = rect.left + rect.width / 2;
@@ -140,24 +150,31 @@ export function CardInteraction({
       rect.right + MARGIN + PREVIEW_WIDTH <= viewportWidth - MARGIN;
 
     if (rightFits) {
+      // Show to the right of the card
       left = rect.right + MARGIN;
       top = rect.top + rect.height / 2 - PREVIEW_HEIGHT / 2;
     } else {
+      // Show above if there is space, otherwise below
       const aboveTop = rect.top - MARGIN - PREVIEW_HEIGHT;
       const aboveFits = aboveTop >= MARGIN;
+
       if (aboveFits) {
         top = aboveTop;
         left = cardCenterX - PREVIEW_WIDTH / 2;
       } else {
+        // Below card – may overlap the card a bit, but stays fully on-screen
         top = rect.bottom + MARGIN;
         left = cardCenterX - PREVIEW_WIDTH / 2;
       }
     }
 
+    // Clamp horizontally
     left = Math.max(
       MARGIN,
       Math.min(left, viewportWidth - PREVIEW_WIDTH - MARGIN),
     );
+
+    // Clamp vertically
     top = Math.max(
       MARGIN,
       Math.min(top, viewportHeight - PREVIEW_HEIGHT - MARGIN),
@@ -294,6 +311,26 @@ export function CardInteraction({
     closeMenu();
   };
 
+  // Don’t show preview while a card-specific context menu is open
+  const previewShouldShow = previewEnabled && isHovered && !menu.visible;
+
+  const previewNode =
+    previewShouldShow ? (
+      <div
+        className="rb-card-preview"
+        style={{ top: previewPos.top, left: previewPos.left }}
+      >
+        <div className="rb-card-preview-inner">
+          <img
+            src={card.images.large}
+            alt={card.name}
+            className="rb-card-preview-image"
+            draggable={false}
+          />
+        </div>
+      </div>
+    ) : null;
+
   return (
     <>
       <div
@@ -328,21 +365,10 @@ export function CardInteraction({
         </div>
       </div>
 
-      {previewEnabled && isHovered && (
-        <div
-          className="rb-card-preview"
-          style={{ top: previewPos.top, left: previewPos.left }}
-        >
-          <div className="rb-card-preview-inner">
-            <img
-              src={card.images.large}
-              alt={card.name}
-              className="rb-card-preview-image"
-              draggable={false}
-            />
-          </div>
-        </div>
-      )}
+      {/* Preview is portaled to <body> so it escapes any stacking contexts */}
+      {previewNode &&
+        typeof document !== 'undefined' &&
+        createPortal(previewNode, document.body)}
 
       {menu.visible && (
         <div

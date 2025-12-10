@@ -1,4 +1,3 @@
-/* gameplay.css */
 .rb-game-root {
   height: calc(100vh - 72px);
 }
@@ -112,7 +111,8 @@
 /* Floating preview container positioned via inline top/left */
 .rb-card-preview {
   position: fixed;
-  z-index: 60;
+  /* MUST be above any other UI (context menus, modals, etc.) */
+  z-index: 9999 !important;
   pointer-events: none; /* purely visual */
 }
 
