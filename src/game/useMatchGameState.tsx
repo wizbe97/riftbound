@@ -753,7 +753,6 @@ export function useMatchGameState(lobbyId?: string) {
         ];
       }
 
-      // Sync full state after initial P1 dealing
       void syncMatchStateToFirestore(newP1Lists, p2Lists, next);
       return next;
     });
@@ -825,7 +824,6 @@ export function useMatchGameState(lobbyId?: string) {
         ];
       }
 
-      // Sync full state after initial P2 dealing
       void syncMatchStateToFirestore(p1Lists, newP2Lists, next);
       return next;
     });
@@ -863,180 +861,380 @@ export function useMatchGameState(lobbyId?: string) {
   const p1DeckCount = p1Lists?.mainDeck.length ?? 0;
   const p2DeckCount = p2Lists?.mainDeck.length ?? 0;
 
-  // Generic move between zones (drag/drop) – does NOT touch lists, but syncs board
+  // Generic move between zones (drag/drop)
   const moveCardBetweenZones = useCallback(
     (fromZoneId: BoardZoneId, fromIndex: number, toZoneId: BoardZoneId) => {
-      if (fromZoneId === toZoneId) {
-        return;
+      if (fromZoneId === toZoneId) return;
+
+      const source = zoneCards[fromZoneId];
+      if (!source || fromIndex < 0 || fromIndex >= source.length) return;
+
+      const cardToMove = source[fromIndex];
+
+      const newSource = [
+        ...source.slice(0, fromIndex),
+        ...source.slice(fromIndex + 1),
+      ];
+
+      const target = zoneCards[toZoneId] ?? [];
+      const newTarget = [...target, cardToMove];
+
+      const updatedZones: ZoneCardMap = { ...zoneCards };
+
+      if (newSource.length > 0) {
+        updatedZones[fromZoneId] = newSource;
+      } else {
+        delete updatedZones[fromZoneId];
       }
 
-      setZoneCards((prev) => {
-        const source = prev[fromZoneId];
-        if (!source || fromIndex < 0 || fromIndex >= source.length) {
-          return prev;
-        }
+      updatedZones[toZoneId] = newTarget;
 
-        const movingCard = source[fromIndex];
-        const newSource = [
-          ...source.slice(0, fromIndex),
-          ...source.slice(fromIndex + 1),
-        ];
+      const fromIsDiscard =
+        (fromZoneId as string).endsWith('Discard') ||
+        (fromZoneId as string).includes('Discard');
 
-        const target = prev[toZoneId] ?? [];
-        const newTarget = [...target, movingCard];
+      let newP1 = p1Lists;
+      let newP2 = p2Lists;
 
-        const next: ZoneCardMap = { ...prev };
-
-        if (newSource.length > 0) {
-          next[fromZoneId] = newSource;
-        } else {
-          delete next[fromZoneId];
-        }
-
-        next[toZoneId] = newTarget;
-
-        void syncMatchStateToFirestore(p1Lists, p2Lists, next);
-        return next;
-      });
-    },
-    [p1Lists, p2Lists, syncMatchStateToFirestore],
-  );
-
-  // Send a card to discard pile (from any zone that currently holds it)
-  const sendCardToDiscard = useCallback(
-    (fromZoneId: BoardZoneId, fromIndex: number, toDiscardZoneId: BoardZoneId) => {
-      setZoneCards((prev) => {
-        const source = prev[fromZoneId];
-        if (!source || fromIndex < 0 || fromIndex >= source.length) {
-          return prev;
-        }
-
-        const movingCard = source[fromIndex];
-
-        const newSource = [
-          ...source.slice(0, fromIndex),
-          ...source.slice(fromIndex + 1),
-        ];
-
-        const target = prev[toDiscardZoneId] ?? [];
-        const newTarget = [...target, movingCard];
-
-        const next: ZoneCardMap = { ...prev };
-
-        if (newSource.length > 0) {
-          next[fromZoneId] = newSource;
-        } else {
-          delete next[fromZoneId];
-        }
-
-        next[toDiscardZoneId] = newTarget;
-
+      if (fromIsDiscard) {
         const seat: PlayerSeat =
-          toDiscardZoneId.startsWith('p1') || toDiscardZoneId.includes('P1')
+          (fromZoneId as string).startsWith('p1') ||
+          (fromZoneId as string).includes('P1')
             ? 'p1'
             : 'p2';
 
-        if (seat === 'p1') {
-          setP1Lists((prevLists) => {
-            if (!prevLists) return prevLists;
-            const newP1: PlayerCardLists = {
-              ...prevLists,
-              discard: [...prevLists.discard, movingCard.card],
-            };
-            void syncMatchStateToFirestore(newP1, p2Lists, next);
-            return newP1;
-          });
-        } else {
-          setP2Lists((prevLists) => {
-            if (!prevLists) return prevLists;
-            const newP2: PlayerCardLists = {
-              ...prevLists,
-              discard: [...prevLists.discard, movingCard.card],
-            };
-            void syncMatchStateToFirestore(p1Lists, newP2, next);
-            return newP2;
-          });
+        if (seat === 'p1' && p1Lists) {
+          const idx = p1Lists.discard.findIndex(
+            (c) => c.id === cardToMove.card.id,
+          );
+          const newDiscard =
+            idx === -1
+              ? p1Lists.discard
+              : [
+                  ...p1Lists.discard.slice(0, idx),
+                  ...p1Lists.discard.slice(idx + 1),
+                ];
+          newP1 = { ...p1Lists, discard: newDiscard };
+        } else if (seat === 'p2' && p2Lists) {
+          const idx = p2Lists.discard.findIndex(
+            (c) => c.id === cardToMove.card.id,
+          );
+          const newDiscard =
+            idx === -1
+              ? p2Lists.discard
+              : [
+                  ...p2Lists.discard.slice(0, idx),
+                  ...p2Lists.discard.slice(idx + 1),
+                ];
+          newP2 = { ...p2Lists, discard: newDiscard };
         }
+      }
 
-        console.log(
-          '[useMatchGameState]',
-          instanceIdRef.current,
-          'sendCardToDiscard:',
-          movingCard.card.name,
-          '->',
-          toDiscardZoneId,
-        );
-
-        return next;
-      });
+      setZoneCards(updatedZones);
+      if (newP1 !== p1Lists) setP1Lists(newP1);
+      if (newP2 !== p2Lists) setP2Lists(newP2);
+      void syncMatchStateToFirestore(newP1, newP2, updatedZones);
     },
-    [p1Lists, p2Lists, syncMatchStateToFirestore],
+    [zoneCards, p1Lists, p2Lists, syncMatchStateToFirestore],
+  );
+
+  // Send a card to discard pile (from any zone)
+  const sendCardToDiscard = useCallback(
+    (
+      fromZoneId: BoardZoneId,
+      fromIndex: number,
+      toDiscardZoneId: BoardZoneId,
+    ) => {
+      const source = zoneCards[fromZoneId];
+      if (!source || fromIndex < 0 || fromIndex >= source.length) return;
+
+      const cardToMove = source[fromIndex];
+
+      const newSource = [
+        ...source.slice(0, fromIndex),
+        ...source.slice(fromIndex + 1),
+      ];
+      const target = zoneCards[toDiscardZoneId] ?? [];
+      const newTarget = [...target, cardToMove];
+
+      const updatedZones: ZoneCardMap = { ...zoneCards };
+
+      if (newSource.length > 0) {
+        updatedZones[fromZoneId] = newSource;
+      } else {
+        delete updatedZones[fromZoneId];
+      }
+
+      updatedZones[toDiscardZoneId] = newTarget;
+
+      const seat: PlayerSeat =
+        (toDiscardZoneId as string).startsWith('p1') ||
+        (toDiscardZoneId as string).includes('P1')
+          ? 'p1'
+          : 'p2';
+
+      let newP1 = p1Lists;
+      let newP2 = p2Lists;
+
+      if (seat === 'p1' && p1Lists) {
+        newP1 = {
+          ...p1Lists,
+          discard: [...p1Lists.discard, cardToMove.card],
+        };
+      } else if (seat === 'p2' && p2Lists) {
+        newP2 = {
+          ...p2Lists,
+          discard: [...p2Lists.discard, cardToMove.card],
+        };
+      }
+
+      setZoneCards(updatedZones);
+      if (newP1 !== p1Lists) setP1Lists(newP1);
+      if (newP2 !== p2Lists) setP2Lists(newP2);
+      void syncMatchStateToFirestore(newP1, newP2, updatedZones);
+
+      console.log(
+        '[useMatchGameState]',
+        instanceIdRef.current,
+        'sendCardToDiscard:',
+        cardToMove.card.name,
+        '->',
+        toDiscardZoneId,
+      );
+    },
+    [zoneCards, p1Lists, p2Lists, syncMatchStateToFirestore],
   );
 
   // Send a card to the bottom of the main deck (from any zone)
   const sendCardToBottomOfDeck = useCallback(
     (fromZoneId: BoardZoneId, fromIndex: number, deckZoneId: BoardZoneId) => {
-      setZoneCards((prev) => {
-        const source = prev[fromZoneId];
-        if (!source || fromIndex < 0 || fromIndex >= source.length) {
-          return prev;
-        }
+      const source = zoneCards[fromZoneId];
+      if (!source || fromIndex < 0 || fromIndex >= source.length) return;
 
-        const movingCard = source[fromIndex];
+      const cardToMove = source[fromIndex];
 
-        const newSource = [
-          ...source.slice(0, fromIndex),
-          ...source.slice(fromIndex + 1),
-        ];
+      const newSource = [
+        ...source.slice(0, fromIndex),
+        ...source.slice(fromIndex + 1),
+      ];
 
-        const next: ZoneCardMap = { ...prev };
+      const updatedZones: ZoneCardMap = { ...zoneCards };
 
-        if (newSource.length > 0) {
-          next[fromZoneId] = newSource;
-        } else {
-          delete next[fromZoneId];
-        }
+      if (newSource.length > 0) {
+        updatedZones[fromZoneId] = newSource;
+      } else {
+        delete updatedZones[fromZoneId];
+      }
 
-        const seat: PlayerSeat =
-          deckZoneId.startsWith('p1') || deckZoneId.includes('P1')
-            ? 'p1'
-            : 'p2';
+      const seat: PlayerSeat =
+        (deckZoneId as string).startsWith('p1') ||
+        (deckZoneId as string).includes('P1')
+          ? 'p1'
+          : 'p2';
 
-        if (seat === 'p1') {
-          setP1Lists((prevLists) => {
-            if (!prevLists) return prevLists;
-            const newP1: PlayerCardLists = {
-              ...prevLists,
-              mainDeck: [...prevLists.mainDeck, movingCard.card],
-            };
-            void syncMatchStateToFirestore(newP1, p2Lists, next);
-            return newP1;
-          });
-        } else {
-          setP2Lists((prevLists) => {
-            if (!prevLists) return prevLists;
-            const newP2: PlayerCardLists = {
-              ...prevLists,
-              mainDeck: [...prevLists.mainDeck, movingCard.card],
-            };
-            void syncMatchStateToFirestore(p1Lists, newP2, next);
-            return newP2;
-          });
-        }
+      let newP1 = p1Lists;
+      let newP2 = p2Lists;
 
-        console.log(
-          '[useMatchGameState]',
-          instanceIdRef.current,
-          'sendCardToBottomOfDeck:',
-          movingCard.card.name,
-          '->',
-          deckZoneId,
-        );
+      if (seat === 'p1' && p1Lists) {
+        newP1 = {
+          ...p1Lists,
+          mainDeck: [...p1Lists.mainDeck, cardToMove.card],
+        };
+      } else if (seat === 'p2' && p2Lists) {
+        newP2 = {
+          ...p2Lists,
+          mainDeck: [...p2Lists.mainDeck, cardToMove.card],
+        };
+      }
 
-        return next;
-      });
+      setZoneCards(updatedZones);
+      if (newP1 !== p1Lists) setP1Lists(newP1);
+      if (newP2 !== p2Lists) setP2Lists(newP2);
+      void syncMatchStateToFirestore(newP1, newP2, updatedZones);
+
+      console.log(
+        '[useMatchGameState]',
+        instanceIdRef.current,
+        'sendCardToBottomOfDeck:',
+        cardToMove.card.name,
+        '->',
+        deckZoneId,
+      );
     },
-    [p1Lists, p2Lists, syncMatchStateToFirestore],
+    [zoneCards, p1Lists, p2Lists, syncMatchStateToFirestore],
+  );
+
+  // Move a specific card from discard pile to bottom of deck
+  const moveCardFromDiscardToBottomOfDeck = useCallback(
+    (discardZoneId: BoardZoneId, index: number) => {
+      const source = zoneCards[discardZoneId];
+      if (!source || index < 0 || index >= source.length) return;
+
+      const cardToMove = source[index];
+
+      const newSource = [
+        ...source.slice(0, index),
+        ...source.slice(index + 1),
+      ];
+
+      const updatedZones: ZoneCardMap = { ...zoneCards };
+
+      if (newSource.length > 0) {
+        updatedZones[discardZoneId] = newSource;
+      } else {
+        delete updatedZones[discardZoneId];
+      }
+
+      const seat: PlayerSeat =
+        (discardZoneId as string).startsWith('p1') ||
+        (discardZoneId as string).includes('P1')
+          ? 'p1'
+          : 'p2';
+
+      let newP1 = p1Lists;
+      let newP2 = p2Lists;
+
+      if (seat === 'p1' && p1Lists) {
+        const discardIndex = p1Lists.discard.findIndex(
+          (c) => c.id === cardToMove.card.id,
+        );
+        const newDiscard =
+          discardIndex === -1
+            ? p1Lists.discard
+            : [
+                ...p1Lists.discard.slice(0, discardIndex),
+                ...p1Lists.discard.slice(discardIndex + 1),
+              ];
+
+        newP1 = {
+          ...p1Lists,
+          discard: newDiscard,
+          mainDeck: [...p1Lists.mainDeck, cardToMove.card],
+        };
+      } else if (seat === 'p2' && p2Lists) {
+        const discardIndex = p2Lists.discard.findIndex(
+          (c) => c.id === cardToMove.card.id,
+        );
+        const newDiscard =
+          discardIndex === -1
+            ? p2Lists.discard
+            : [
+                ...p2Lists.discard.slice(0, discardIndex),
+                ...p2Lists.discard.slice(discardIndex + 1),
+              ];
+
+        newP2 = {
+          ...p2Lists,
+          discard: newDiscard,
+          mainDeck: [...p2Lists.mainDeck, cardToMove.card],
+        };
+      }
+
+      setZoneCards(updatedZones);
+      if (newP1 !== p1Lists) setP1Lists(newP1);
+      if (newP2 !== p2Lists) setP2Lists(newP2);
+      void syncMatchStateToFirestore(newP1, newP2, updatedZones);
+
+      console.log(
+        '[useMatchGameState]',
+        instanceIdRef.current,
+        'moveCardFromDiscardToBottomOfDeck:',
+        cardToMove.card.name,
+        'from',
+        discardZoneId,
+      );
+    },
+    [zoneCards, p1Lists, p2Lists, syncMatchStateToFirestore],
+  );
+
+  // Move a specific card from discard pile into hand
+  const moveCardFromDiscardToHand = useCallback(
+    (discardZoneId: BoardZoneId, index: number) => {
+      const source = zoneCards[discardZoneId];
+      if (!source || index < 0 || index >= source.length) return;
+
+      const cardToMove = source[index];
+
+      const newSource = [
+        ...source.slice(0, index),
+        ...source.slice(index + 1),
+      ];
+
+      const updatedZones: ZoneCardMap = { ...zoneCards };
+
+      if (newSource.length > 0) {
+        updatedZones[discardZoneId] = newSource;
+      } else {
+        delete updatedZones[discardZoneId];
+      }
+
+      const seat: PlayerSeat =
+        (discardZoneId as string).startsWith('p1') ||
+        (discardZoneId as string).includes('P1')
+          ? 'p1'
+          : 'p2';
+
+      const handZoneId: BoardZoneId =
+        seat === 'p1' ? 'p1Hand' : 'p2Hand';
+
+      const existingHand = updatedZones[handZoneId] ?? [];
+      updatedZones[handZoneId] = [
+        ...existingHand,
+        { card: cardToMove.card, ownerSeat: seat },
+      ];
+
+      let newP1 = p1Lists;
+      let newP2 = p2Lists;
+
+      if (seat === 'p1' && p1Lists) {
+        const discardIndex = p1Lists.discard.findIndex(
+          (c) => c.id === cardToMove.card.id,
+        );
+        const newDiscard =
+          discardIndex === -1
+            ? p1Lists.discard
+            : [
+                ...p1Lists.discard.slice(0, discardIndex),
+                ...p1Lists.discard.slice(discardIndex + 1),
+              ];
+
+        newP1 = {
+          ...p1Lists,
+          discard: newDiscard,
+        };
+      } else if (seat === 'p2' && p2Lists) {
+        const discardIndex = p2Lists.discard.findIndex(
+          (c) => c.id === cardToMove.card.id,
+        );
+        const newDiscard =
+          discardIndex === -1
+            ? p2Lists.discard
+            : [
+                ...p2Lists.discard.slice(0, discardIndex),
+                ...p2Lists.discard.slice(discardIndex + 1),
+              ];
+
+        newP2 = {
+          ...p2Lists,
+          discard: newDiscard,
+        };
+      }
+
+      setZoneCards(updatedZones);
+      if (newP1 !== p1Lists) setP1Lists(newP1);
+      if (newP2 !== p2Lists) setP2Lists(newP2);
+      void syncMatchStateToFirestore(newP1, newP2, updatedZones);
+
+      console.log(
+        '[useMatchGameState]',
+        instanceIdRef.current,
+        'moveCardFromDiscardToHand:',
+        cardToMove.card.name,
+        'from',
+        discardZoneId,
+      );
+    },
+    [zoneCards, p1Lists, p2Lists, syncMatchStateToFirestore],
   );
 
   // Click deck → draw top card from main deck into hand (face-up).
@@ -1149,6 +1347,8 @@ export function useMatchGameState(lobbyId?: string) {
     moveCardBetweenZones,
     sendCardToDiscard,
     sendCardToBottomOfDeck,
+    moveCardFromDiscardToBottomOfDeck,
+    moveCardFromDiscardToHand,
     drawFromDeck,
   };
 }
