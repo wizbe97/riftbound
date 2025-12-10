@@ -32,7 +32,7 @@
   }
 }
 
-/* Rectangular zones (battle lanes, base, rune channel, hand) */
+/* Rectangular zones (battle lanes, base, rune channel, hand, score) */
 .rb-zone-rect {
   height: var(--rb-card-height);
 }
@@ -53,7 +53,7 @@
   border-radius: 0.45rem;
   object-fit: cover;
   box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
-  transition: transform 120ms ease-out;
+  transition: transform 150ms ease-out;
 }
 
 /* Pile container for decks / rune piles (back-of-card image + count text) */
@@ -109,11 +109,6 @@
   cursor: grab;
 }
 
-/* Slight grow on hover (card in the zone) */
-.rb-card-interaction:hover .rb-card-image {
-  transform: scale(1.08);
-}
-
 /* Floating preview container positioned via inline top/left */
 .rb-card-preview {
   position: fixed;
@@ -123,8 +118,8 @@
 
 /* Inner wrapper so we can constrain size and add border/background */
 .rb-card-preview-inner {
-  max-height: 90vh;
-  max-width: 22vw;
+  max-height: 70vh;
+  max-width: 18vw;
   border-radius: 0.75rem;
   border: 1px solid rgba(251, 191, 36, 0.8); /* amber-400-ish */
   background: rgba(15, 23, 42, 0.95); /* slate-900-ish */
@@ -137,9 +132,51 @@
 /* Preview image itself */
 .rb-card-preview-image {
   display: block;
-  max-height: 86vh;
-  max-width: 21vw;
+  max-height: 66vh;
+  max-width: 17vw;
   height: auto;
   width: auto;
   border-radius: 0.65rem;
+}
+
+/* ========================= */
+/* Rune recycle overlay      */
+/* ========================= */
+
+.rb-rune-recycle-btn {
+  position: absolute;
+  top: -0.2rem;
+  right: -0.2rem;
+  z-index: 200;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 9999px;
+  border: 1px solid rgba(148, 163, 184, 0.95); /* slate-400 */
+  background: rgba(15, 23, 42, 0.98); /* slate-900 */
+  font-size: 0.7rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #e5e7eb;
+}
+
+.rb-rune-recycle-btn:hover {
+  border-color: rgba(251, 191, 36, 0.85); /* amber-400 */
+  color: #fbbf24;
+}
+
+/* ========================= */
+/* Score display             */
+/* ========================= */
+
+.rb-score-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+  transition: color 150ms ease-out;
+}
+
+@media (min-width: 1960px) and (min-height: 1080px) {
+  .rb-score-value {
+    font-size: 1.6rem;
+  }
 }

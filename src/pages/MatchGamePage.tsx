@@ -93,6 +93,11 @@ function MatchGamePage() {
     moveCardFromDiscardToBottomOfDeck,
     moveCardFromDiscardToHand,
     drawFromDeck,
+    drawRuneFromPile,
+    p1Score,
+    p2Score,
+    incrementScore,
+    decrementScore,
   } = useMatchGameState(lobbyId);
 
   if (!user) {
@@ -324,6 +329,23 @@ function MatchGamePage() {
   const p1Name = lobby.p1?.username ?? 'Player 1';
   const p2Name = lobby.p2?.username ?? 'Player 2';
 
+  // Map seat scores to top/bottom for this client
+  const topScore = topPlayer === 'p1' ? p1Score : p2Score;
+  const bottomScore = bottomPlayer === 'p1' ? p1Score : p2Score;
+
+  const canEditTopScore = mySeat === topPlayer;
+  const canEditBottomScore = mySeat === bottomPlayer;
+
+  const incrementMyScore = () => {
+    if (!mySeat) return;
+    incrementScore(mySeat);
+  };
+
+  const decrementMyScore = () => {
+    if (!mySeat) return;
+    decrementScore(mySeat);
+  };
+
   return (
     <>
       <section className="rb-game-root flex flex-col">
@@ -355,6 +377,13 @@ function MatchGamePage() {
                 }
                 moveCardFromDiscardToHand={moveCardFromDiscardToHand}
                 drawFromDeck={drawFromDeck}
+                drawRuneFromPile={drawRuneFromPile}
+                topScore={topScore}
+                bottomScore={bottomScore}
+                incrementMyScore={incrementMyScore}
+                decrementMyScore={decrementMyScore}
+                canEditTopScore={canEditTopScore}
+                canEditBottomScore={canEditBottomScore}
               />
             </div>
           </div>
@@ -406,6 +435,13 @@ type GameBoardLayoutProps = {
     index: number,
   ) => void;
   drawFromDeck: (seat: PlayerSeat) => void;
+  drawRuneFromPile: (seat: PlayerSeat) => void;
+  topScore: number;
+  bottomScore: number;
+  incrementMyScore: () => void;
+  decrementMyScore: () => void;
+  canEditTopScore: boolean;
+  canEditBottomScore: boolean;
 };
 
 function getRowMarginTop(row: number): number {
@@ -462,6 +498,13 @@ function GameBoardLayout({
   moveCardFromDiscardToBottomOfDeck,
   moveCardFromDiscardToHand,
   drawFromDeck,
+  drawRuneFromPile,
+  topScore,
+  bottomScore,
+  incrementMyScore,
+  decrementMyScore,
+  canEditTopScore,
+  canEditBottomScore,
 }: GameBoardLayoutProps) {
   const [windowSize, setWindowSize] = useState({ width: 0, height: 0 });
 
@@ -481,8 +524,12 @@ function GameBoardLayout({
     ownerName: '',
   });
 
+  const [topScoreFlash, setTopScoreFlash] = useState(false);
+  const [bottomScoreFlash, setBottomScoreFlash] = useState(false);
+
   const discardMenuRef = useRef<HTMLDivElement | null>(null);
 
+  // Close discard cell menu
   useEffect(() => {
     if (!discardMenu.visible) return;
 
@@ -494,9 +541,11 @@ function GameBoardLayout({
     };
 
     document.addEventListener('mousedown', handleDocMouseDown);
-    return () => document.removeEventListener('mousedown', handleDocMouseDown);
+    return () =>
+      document.removeEventListener('mousedown', handleDocMouseDown);
   }, [discardMenu.visible]);
 
+  // Window size for hand fan overlap logic
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -511,6 +560,19 @@ function GameBoardLayout({
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  // Score flash when value changes
+  useEffect(() => {
+    setTopScoreFlash(true);
+    const t = setTimeout(() => setTopScoreFlash(false), 250);
+    return () => clearTimeout(t);
+  }, [topScore]);
+
+  useEffect(() => {
+    setBottomScoreFlash(true);
+    const t = setTimeout(() => setBottomScoreFlash(false), 250);
+    return () => clearTimeout(t);
+  }, [bottomScore]);
 
   const maxFullWidthCards = getMaxFullWidthCards(
     windowSize.width,
@@ -552,6 +614,15 @@ function GameBoardLayout({
 
     if (fromOwner !== mySeat || toOwner !== mySeat) return;
 
+    // Legend zone is immutable
+    if (
+      (fromZoneId as string) === 'p1LegendZone' ||
+      (fromZoneId as string) === 'p2LegendZone'
+    ) {
+      return;
+    }
+
+    // Can't drag into decks / rune piles
     if (
       (toZoneId as string) === 'p1Deck' ||
       (toZoneId as string) === 'p2Deck' ||
@@ -600,24 +671,55 @@ function GameBoardLayout({
     sendCardToBottomOfDeck(zoneId, index, deckZoneId);
   };
 
-  const handleDiscardCellContextMenu = (
-    e: React.MouseEvent<HTMLDivElement>,
+  const handleSendRuneToBottomFromCard = (
+    zoneId: BoardZoneId,
+    index: number,
+  ) => {
+    const owner = getZoneOwnerFromId(zoneId);
+    if (!owner) return;
+
+    const runeDeckZoneId: BoardZoneId =
+      owner === 'p1' ? 'p1RuneDeck' : 'p2RuneDeck';
+
+    sendCardToBottomOfDeck(zoneId, index, runeDeckZoneId);
+  };
+
+  const openDiscardMenu = (
+    clientX: number,
+    clientY: number,
     cell: LayoutCell,
     zoneOwner: PlayerSeat | null,
   ) => {
-    e.preventDefault();
     if (!zoneOwner) return;
 
     const ownerName = zoneOwner === 'p1' ? p1Name : p2Name;
 
     setDiscardMenu({
       visible: true,
-      x: e.clientX,
-      y: e.clientY,
+      x: clientX,
+      y: clientY,
       zoneId: cell.zoneId,
       ownerSeat: zoneOwner,
       ownerName: ownerName || (zoneOwner === 'p1' ? 'Player 1' : 'Player 2'),
     });
+  };
+
+  const handleDiscardCellContextMenu = (
+    e: React.MouseEvent<HTMLDivElement>,
+    cell: LayoutCell,
+    zoneOwner: PlayerSeat | null,
+  ) => {
+    e.preventDefault();
+    openDiscardMenu(e.clientX, e.clientY, cell, zoneOwner);
+  };
+
+  const handleDiscardCellClick = (
+    e: React.MouseEvent<HTMLDivElement>,
+    cell: LayoutCell,
+    zoneOwner: PlayerSeat | null,
+  ) => {
+    e.preventDefault();
+    openDiscardMenu(e.clientX, e.clientY, cell, zoneOwner);
   };
 
   const openDiscardModalFromMenu = () => {
@@ -681,7 +783,7 @@ function GameBoardLayout({
 
           const cardsInZone = zoneCards[cell.zoneId] ?? [];
           const zoneOwner = getZoneOwnerFromId(cell.zoneId);
-          const canInteract =
+          const canInteractBase =
             mySeat !== null && zoneOwner !== null && mySeat === zoneOwner;
 
           const discardZone = isDiscardZoneId(cell.zoneId);
@@ -689,23 +791,40 @@ function GameBoardLayout({
             (cell.zoneId as string) === 'p1Hand' ||
             (cell.zoneId as string) === 'p2Hand';
 
+          const isRuneChannelZone =
+            (cell.zoneId as string) === 'p1RuneChannel' ||
+            (cell.zoneId as string) === 'p2RuneChannel';
+
+          const isLegendZone =
+            (cell.zoneId as string) === 'p1LegendZone' ||
+            (cell.zoneId as string) === 'p2LegendZone';
+
           const showRealCardsInRectZone =
             !isHandZone || (mySeat !== null && zoneOwner === mySeat);
 
           let innerContent: ReactNode = null;
 
+          // Rune piles
           if (
             (cell.zoneId as string) === 'p1RuneDeck' ||
             (cell.zoneId as string) === 'p2RuneDeck'
           ) {
-            const count =
-              (cell.zoneId as string) === 'p1RuneDeck'
-                ? pileCounts.p1Rune
-                : pileCounts.p2Rune;
+            const isP1Rune = (cell.zoneId as string) === 'p1RuneDeck';
+            const count = isP1Rune ? pileCounts.p1Rune : pileCounts.p2Rune;
+            const ownerSeat: PlayerSeat = isP1Rune ? 'p1' : 'p2';
+            const canDraw =
+              mySeat !== null && mySeat === ownerSeat && count > 0;
 
             if (count > 0) {
               innerContent = (
-                <div className="rb-pile-inner">
+                <div
+                  className={`rb-pile-inner ${
+                    canDraw ? 'cursor-pointer' : 'cursor-default'
+                  }`}
+                  onClick={
+                    canDraw ? () => drawRuneFromPile(ownerSeat) : undefined
+                  }
+                >
                   <img
                     src={runeBackImg}
                     alt="Rune pile"
@@ -747,13 +866,12 @@ function GameBoardLayout({
           } else if (discardZone) {
             const discardCards = cardsInZone;
             const count = discardCards.length;
-            const isMyDiscard = mySeat && zoneOwner && mySeat === zoneOwner;
 
             if (count > 0) {
               const topIndex = discardCards.length - 1;
               const topZc = discardCards[topIndex];
 
-              if (isMyDiscard) {
+              if (mySeat && zoneOwner && mySeat === zoneOwner) {
                 // Our discard: top card is draggable with preview, no rotation, no card menu
                 innerContent = (
                   <div className="rb-pile-inner cursor-pointer">
@@ -773,7 +891,7 @@ function GameBoardLayout({
                   </div>
                 );
               } else {
-                // Opponent discard: just show face-up top card, no interaction, but pointer on pile
+                // Opponent discard: show face-up top card
                 innerContent = (
                   <div className="rb-pile-inner cursor-pointer">
                     <img
@@ -798,6 +916,9 @@ function GameBoardLayout({
             if (cell.kind === 'card') {
               const zoneCard = cardsInZone[0];
 
+              const canInteract =
+                canInteractBase && !isLegendZone; // legend immutable
+
               innerContent = (
                 <CardInteraction
                   card={zoneCard.card}
@@ -805,8 +926,15 @@ function GameBoardLayout({
                   lobbyId={lobbyId}
                   zoneId={cell.zoneId}
                   indexInZone={0}
-                  onSendToDiscard={handleSendToDiscardFromCard}
-                  onSendToBottomOfDeck={handleSendToBottomFromCard}
+                  onSendToDiscard={
+                    discardZone || isLegendZone
+                      ? undefined
+                      : handleSendToDiscardFromCard
+                  }
+                  onSendToBottomOfDeck={
+                    isLegendZone ? undefined : handleSendToBottomFromCard
+                  }
+                  disableRotate={isLegendZone}
                 />
               );
             } else {
@@ -824,9 +952,18 @@ function GameBoardLayout({
                 <div className="flex h-full w-full items-center justify-center">
                   <div className="flex h-full items-center justify-center">
                     {cardsInZone.map((zc, idx) => {
-                      const marginLeft =
-                        idx === 0 || count <= 1 ? 0 : overlapPx;
+                      const isRuneCardInChannel = isRuneChannelZone;
 
+                      let marginLeft = 0;
+                      if (idx !== 0 && count > 1) {
+                        // For rune channel: no overlap so recycle is always visible
+                        marginLeft = isRuneCardInChannel ? 6 : overlapPx;
+                      }
+
+                      const canInteract =
+                        canInteractBase && !isLegendZone;
+
+                      // Hand: hide opponent cards
                       if (isHandZone && !showRealCardsInRectZone) {
                         return (
                           <div
@@ -848,17 +985,46 @@ function GameBoardLayout({
                         <div
                           key={`${cell.zoneId}-${idx}-${zc.card.id}`}
                           className="rb-zone-card-slot-inner"
-                          style={{ marginLeft }}
+                          style={{ marginLeft, zIndex: 10 + idx }}
                         >
-                          <CardInteraction
-                            card={zc.card}
-                            canInteract={canInteract}
-                            lobbyId={lobbyId}
-                            zoneId={cell.zoneId}
-                            indexInZone={idx}
-                            onSendToDiscard={handleSendToDiscardFromCard}
-                            onSendToBottomOfDeck={handleSendToBottomFromCard}
-                          />
+                          <div className="relative h-full w-full">
+                            <CardInteraction
+                              card={zc.card}
+                              canInteract={canInteract}
+                              lobbyId={lobbyId}
+                              zoneId={cell.zoneId}
+                              indexInZone={idx}
+                              onSendToDiscard={
+                                isRuneCardInChannel
+                                  ? undefined
+                                  : handleSendToDiscardFromCard
+                              }
+                              onSendToBottomOfDeck={
+                                isRuneCardInChannel
+                                  ? handleSendRuneToBottomFromCard
+                                  : handleSendToBottomFromCard
+                              }
+                              mode={isRuneCardInChannel ? 'rune' : 'default'}
+                              overlay={
+                                isRuneCardInChannel &&
+                                canInteract && (
+                                  <button
+                                    type="button"
+                                    className="rb-rune-recycle-btn"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleSendRuneToBottomFromCard(
+                                        cell.zoneId,
+                                        idx,
+                                      );
+                                    }}
+                                  >
+                                    ↻
+                                  </button>
+                                )
+                              }
+                            />
+                          </div>
                         </div>
                       );
                     })}
@@ -885,6 +1051,11 @@ function GameBoardLayout({
                   ? handleDiscardCellContextMenu(e, cell, zoneOwner)
                   : undefined
               }
+              onClick={(e) =>
+                isDiscardCell
+                  ? handleDiscardCellClick(e, cell, zoneOwner)
+                  : undefined
+              }
             >
               {cell.debugLabel && (
                 <span className="rb-zone-label pointer-events-none absolute left-1 top-1 text-slate-400">
@@ -896,6 +1067,104 @@ function GameBoardLayout({
             </div>
           );
         })}
+
+        {/* TOP SCORE (row 1, next to opponent hand) */}
+        <div
+          style={{
+            gridRow: 1,
+            gridColumn: '5 / span 2',
+            marginTop: getRowMarginTop(1),
+            marginLeft: 0,
+            marginRight: 0,
+            marginBottom: 0,
+          }}
+          className="rb-zone-rect relative flex flex-col items-center justify-center rounded-xl border border-amber-500/40 bg-slate-900/40 p-0"
+        >
+          <div className="flex flex-col items-center justify-center gap-1">
+            <div className="flex items-center justify-center gap-2 text-xs text-slate-100">
+              {canEditTopScore && (
+                <button
+                  type="button"
+                  onClick={incrementMyScore}
+                  className="h-6 w-6 rounded-full border border-slate-600 bg-slate-950 text-[10px] leading-none hover:border-amber-400 hover:text-amber-200"
+                >
+                  ▲
+                </button>
+              )}
+
+              <span
+                className={`rb-score-value min-w-[1.5rem] text-center ${
+                  topScoreFlash ? 'text-red-400' : 'text-slate-50'
+                }`}
+              >
+                {topScore}
+              </span>
+
+              {canEditTopScore && (
+                <button
+                  type="button"
+                  onClick={decrementMyScore}
+                  className="h-6 w-6 rounded-full border border-slate-600 bg-slate-950 text-[10px] leading-none hover:border-amber-400 hover:text-amber-200"
+                >
+                  ▼
+                </button>
+              )}
+            </div>
+
+            <div className="mt-1 text-[10px] tracking-wide text-slate-400">
+              SCORE
+            </div>
+          </div>
+        </div>
+
+        {/* BOTTOM SCORE (row 6, next to our hand) */}
+        <div
+          style={{
+            gridRow: 6,
+            gridColumn: '1 / span 2',
+            marginTop: getRowMarginTop(6),
+            marginLeft: 0,
+            marginRight: 0,
+            marginBottom: 0,
+          }}
+          className="rb-zone-rect relative flex flex-col items-center justify-center rounded-xl border border-amber-500/40 bg-slate-900/40 p-0"
+        >
+          <div className="flex flex-col items-center justify-center gap-1">
+            <div className="flex items-center justify-center gap-2 text-xs text-slate-100">
+              {canEditBottomScore && (
+                <button
+                  type="button"
+                  onClick={incrementMyScore}
+                  className="h-6 w-6 rounded-full border border-slate-600 bg-slate-950 text-[10px] leading-none hover:border-amber-400 hover:text-amber-200"
+                >
+                  ▲
+                </button>
+              )}
+
+              <span
+                className={`rb-score-value min-w-[1.5rem] text-center ${
+                  bottomScoreFlash ? 'text-red-400' : 'text-slate-50'
+                }`}
+              >
+                {bottomScore}
+              </span>
+
+              {canEditBottomScore && (
+                <button
+                  type="button"
+                  onClick={decrementMyScore}
+                  className="h-6 w-6 rounded-full border border-slate-600 bg-slate-950 text-[10px] leading-none hover:border-amber-400 hover:text-amber-200"
+                >
+                  ▼
+                </button>
+              )}
+            </div>
+
+            <div className="mt-1 text-[10px] tracking-wide text-slate-400">
+              SCORE
+            </div>
+          </div>
+        </div>
       </div>
 
       {discardMenu.visible && discardMenu.zoneId && (

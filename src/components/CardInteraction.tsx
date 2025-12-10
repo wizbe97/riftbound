@@ -21,12 +21,15 @@ type CardInteractionProps = {
    * default: 'default'
    * - 'discard-modal': context menu is "send to bottom" / "send to hand"
    * - 'discard-top': used for the top card of the discard pile on the board
+   * - 'rune': rune in rune channel; only "send to bottom of rune pile"
    */
-  mode?: 'default' | 'discard-modal' | 'discard-top';
+  mode?: 'default' | 'discard-modal' | 'discard-top' | 'rune';
   /** If true, left-click rotation is disabled */
   disableRotate?: boolean;
   /** If true, card-specific right-click menu is disabled */
   disableContextMenu?: boolean;
+  /** Optional overlay rendered inside the rotating wrapper (e.g. rune recycle button) */
+  overlay?: React.ReactNode;
 };
 
 type PreviewPos = { top: number; left: number };
@@ -49,6 +52,7 @@ export function CardInteraction({
   mode = 'default',
   disableRotate = false,
   disableContextMenu = false,
+  overlay,
 }: CardInteractionProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [previewPos, setPreviewPos] = useState<PreviewPos>({ top: 0, left: 0 });
@@ -65,9 +69,12 @@ export function CardInteraction({
   const rotationEnabled = canInteract && !disableRotate;
   const contextMenuEnabled = canInteract && !disableContextMenu;
   const isDiscardModal = mode === 'discard-modal';
+  const isRuneMode = mode === 'rune';
+  const previewEnabled = !isRuneMode; // no hover preview for rune cards
 
   const rotationDocId = `${zoneId}-${card.id}-${indexInZone}`;
 
+  // Subscribe to per-card rotation state
   useEffect(() => {
     if (!lobbyId) return;
 
@@ -95,6 +102,7 @@ export function CardInteraction({
     return unsubscribe;
   }, [lobbyId, rotationDocId]);
 
+  // Close menu when clicking outside
   useEffect(() => {
     if (!menu.visible) return;
 
@@ -109,7 +117,8 @@ export function CardInteraction({
     };
 
     document.addEventListener('mousedown', handleDocMouseDown);
-    return () => document.removeEventListener('mousedown', handleDocMouseDown);
+    return () =>
+      document.removeEventListener('mousedown', handleDocMouseDown);
   }, [menu.visible]);
 
   const updatePreviewPosition = useCallback((target: HTMLElement) => {
@@ -117,8 +126,8 @@ export function CardInteraction({
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
 
-    const PREVIEW_WIDTH = 320;
-    const PREVIEW_HEIGHT = 480;
+    const PREVIEW_WIDTH = 260;
+    const PREVIEW_HEIGHT = 420;
     const MARGIN = 16;
 
     const cardCenterX = rect.left + rect.width / 2;
@@ -145,23 +154,31 @@ export function CardInteraction({
       }
     }
 
-    left = Math.max(MARGIN, Math.min(left, viewportWidth - PREVIEW_WIDTH - MARGIN));
-    top = Math.max(MARGIN, Math.min(top, viewportHeight - PREVIEW_HEIGHT - MARGIN));
+    left = Math.max(
+      MARGIN,
+      Math.min(left, viewportWidth - PREVIEW_WIDTH - MARGIN),
+    );
+    top = Math.max(
+      MARGIN,
+      Math.min(top, viewportHeight - PREVIEW_HEIGHT - MARGIN),
+    );
 
     setPreviewPos({ top, left });
   }, []);
 
   const handleMouseEnter = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!previewEnabled) return;
     setIsHovered(true);
     updatePreviewPosition(e.currentTarget);
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isHovered) return;
+    if (!previewEnabled || !isHovered) return;
     updatePreviewPosition(e.currentTarget);
   };
 
   const handleMouseLeave = () => {
+    if (!previewEnabled) return;
     setIsHovered(false);
   };
 
@@ -195,6 +212,17 @@ export function CardInteraction({
   ) => {
     e.preventDefault();
     closeMenu();
+
+    // In discard modal, left click should open the context menu as well
+    if (isDiscardModal && contextMenuEnabled) {
+      setMenu({
+        visible: true,
+        x: e.clientX,
+        y: e.clientY,
+      });
+      return;
+    }
+
     if (!rotationEnabled) return;
     await toggleRotation();
   };
@@ -263,7 +291,7 @@ export function CardInteraction({
     <>
       <div
         ref={rootRef}
-        className="relative h-full w-full cursor-pointer"
+        className="rb-card-interaction relative h-full w-full cursor-pointer"
         onMouseEnter={handleMouseEnter}
         onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
@@ -273,34 +301,42 @@ export function CardInteraction({
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
-        <img
-          src={card.images.small}
-          alt={card.name}
-          className="h-full w-full rounded-md object-contain shadow-md transition-transform duration-150"
-          style={{
-            transform: rotationEnabled && rotation === 90 ? 'rotate(90deg)' : 'rotate(0deg)',
-            transformOrigin: '50% 50%',
-          }}
-          draggable={false}
-        />
-      </div>
-
-      {isHovered && (
         <div
-          className="pointer-events-none fixed z-[60]"
+          className="relative h-full w-full rounded-md shadow-md transition-transform duration-150"
           style={{
-            top: previewPos.top,
-            left: previewPos.left,
-            maxHeight: '80vh',
-            maxWidth: '20rem',
+            transform:
+              rotationEnabled && rotation === 90
+                ? 'rotate(90deg)'
+                : 'rotate(0deg)',
+            transformOrigin: '50% 50%',
           }}
         >
           <img
-            src={card.images.large}
+            src={card.images.small}
             alt={card.name}
-            className="max-h-[80vh] max-w-[20rem] rounded-xl shadow-2xl"
+            className="h-full w-full rounded-md object-contain"
             draggable={false}
           />
+          {overlay}
+        </div>
+      </div>
+
+      {previewEnabled && isHovered && (
+        <div
+          className="rb-card-preview"
+          style={{
+            top: previewPos.top,
+            left: previewPos.left,
+          }}
+        >
+          <div className="rb-card-preview-inner">
+            <img
+              src={card.images.large}
+              alt={card.name}
+              className="rb-card-preview-image"
+              draggable={false}
+            />
+          </div>
         </div>
       )}
 
@@ -325,6 +361,16 @@ export function CardInteraction({
                 onClick={handleMenuSendToHandFromDiscard}
               >
                 Send to hand
+              </button>
+            </>
+          ) : isRuneMode ? (
+            <>
+              <button
+                type="button"
+                className="block w-full cursor-pointer rounded px-2 py-1 text-left hover:bg-slate-700"
+                onClick={handleMenuSendToBottom}
+              >
+                Send to bottom of rune pile
               </button>
             </>
           ) : (
