@@ -10,6 +10,7 @@ import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import type { RiftboundCard } from '../data/riftboundCards';
 import type { BoardZoneId } from '../game/boardConfig';
+import cardBackImg from '../assets/back-of-card.jpg';
 
 type CardInteractionProps = {
   card: RiftboundCard;
@@ -30,12 +31,18 @@ type CardInteractionProps = {
    * - 'rune': rune in rune channel; only "send to bottom of rune pile"
    */
   mode?: 'default' | 'discard-modal' | 'discard-top' | 'rune';
-  /** If true, left-click rotation is disabled */
+  /** If true, left-click rotation is disabled entirely */
   disableRotate?: boolean;
   /** If true, card-specific right-click menu is disabled */
   disableContextMenu?: boolean;
   /** Optional overlay rendered inside the rotating wrapper (e.g. rune recycle button) */
   overlay?: React.ReactNode;
+  /** Explicit control over whether this card can rotate (defaults to canInteract) */
+  canRotate?: boolean;
+  /** Whether the current viewer is the owner of the card (for hidden preview logic) */
+  isOwnerView?: boolean;
+  /** Whether the "Hide / Unhide" option should be shown in the context menu */
+  allowHide?: boolean;
 };
 
 type PreviewPos = {
@@ -62,6 +69,9 @@ export function CardInteraction({
   disableRotate = false,
   disableContextMenu = false,
   overlay,
+  canRotate,
+  isOwnerView = false,
+  allowHide = false,
 }: CardInteractionProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [previewPos, setPreviewPos] = useState<PreviewPos>({
@@ -69,6 +79,7 @@ export function CardInteraction({
     left: 0,
   });
   const [rotation, setRotation] = useState<number>(0);
+  const [hidden, setHidden] = useState<boolean>(false);
   const [menu, setMenu] = useState<ContextMenuState>({
     visible: false,
     x: 0,
@@ -78,15 +89,14 @@ export function CardInteraction({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  const rotationEnabled = canInteract && !disableRotate;
-  const contextMenuEnabled = canInteract && !disableContextMenu;
   const isDiscardModal = mode === 'discard-modal';
   const isRuneMode = mode === 'rune';
   const previewEnabled = !isRuneMode; // no hover preview for rune cards
+  const contextMenuBaseEnabled = !disableContextMenu;
 
   const rotationDocId = `${zoneId}-${card.id}-${indexInZone}`;
 
-  // Subscribe to per-card rotation state
+  // Subscribe to per-card rotation + hidden state
   useEffect(() => {
     if (!lobbyId) return;
 
@@ -101,14 +111,21 @@ export function CardInteraction({
     const unsubscribe = onSnapshot(rotationRef, (snap) => {
       if (!snap.exists()) {
         setRotation(0);
+        setHidden(false);
         return;
       }
-      const data = snap.data() as { rotation?: unknown };
-      const value =
+      const data = snap.data() as { rotation?: unknown; hidden?: unknown };
+
+      const rotationValue =
         typeof data.rotation === 'number' && !Number.isNaN(data.rotation)
           ? data.rotation
           : 0;
-      setRotation(value);
+
+      const hiddenValue =
+        typeof data.hidden === 'boolean' ? data.hidden : false;
+
+      setRotation(rotationValue);
+      setHidden(hiddenValue);
     });
 
     return unsubscribe;
@@ -203,8 +220,11 @@ export function CardInteraction({
     setMenu((prev) => ({ ...prev, visible: false }));
   };
 
+  const effectiveCanRotate = (canRotate ?? canInteract) && !disableRotate;
+  const contextMenuEnabled = canInteract && contextMenuBaseEnabled;
+
   const toggleRotation = useCallback(async () => {
-    if (!rotationEnabled || !lobbyId) return;
+    if (!effectiveCanRotate || !lobbyId) return;
 
     try {
       const next = rotation === 90 ? 0 : 90;
@@ -229,7 +249,35 @@ export function CardInteraction({
       // eslint-disable-next-line no-console
       console.error('[CardInteraction] Failed to rotate card', err);
     }
-  }, [rotationEnabled, lobbyId, rotation, rotationDocId]);
+  }, [effectiveCanRotate, lobbyId, rotation, rotationDocId]);
+
+  const toggleHidden = useCallback(async () => {
+    if (!allowHide || !lobbyId) return;
+
+    try {
+      const next = !hidden;
+      setHidden(next);
+
+      const rotationRef = doc(
+        db,
+        'lobbies',
+        lobbyId,
+        'rotations',
+        rotationDocId,
+      );
+
+      await setDoc(
+        rotationRef,
+        {
+          hidden: next,
+        },
+        { merge: true },
+      );
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[CardInteraction] Failed to toggle hidden state', err);
+    }
+  }, [allowHide, hidden, lobbyId, rotationDocId]);
 
   const handleClick = async (
     e: React.MouseEvent<HTMLDivElement, MouseEvent>,
@@ -247,7 +295,7 @@ export function CardInteraction({
       return;
     }
 
-    if (!rotationEnabled) return;
+    if (!effectiveCanRotate) return;
     await toggleRotation();
   };
 
@@ -311,18 +359,28 @@ export function CardInteraction({
     closeMenu();
   };
 
+  const handleMenuToggleHidden = () => {
+    void toggleHidden();
+    closeMenu();
+  };
+
   // Don’t show preview while a card-specific context menu is open
-  const previewShouldShow = previewEnabled && isHovered && !menu.visible;
+  const previewShouldShow =
+    previewEnabled && isHovered && !menu.visible;
+
+  const boardImageSrc = hidden ? cardBackImg : card.images.small;
+  const previewImageSrc =
+    hidden && !isOwnerView ? cardBackImg : card.images.large;
 
   const previewNode =
-    previewShouldShow ? (
+    previewShouldShow && typeof document !== 'undefined' ? (
       <div
         className="rb-card-preview"
         style={{ top: previewPos.top, left: previewPos.left }}
       >
         <div className="rb-card-preview-inner">
           <img
-            src={card.images.large}
+            src={previewImageSrc}
             alt={card.name}
             className="rb-card-preview-image"
             draggable={false}
@@ -349,14 +407,14 @@ export function CardInteraction({
           className="relative h-full w-full rounded-md shadow-md transition-transform duration-150"
           style={{
             transform:
-              rotationEnabled && rotation === 90
+              effectiveCanRotate && rotation === 90
                 ? 'rotate(90deg)'
                 : 'rotate(0deg)',
             transformOrigin: '50% 50%',
           }}
         >
           <img
-            src={card.images.small}
+            src={boardImageSrc}
             alt={card.name}
             className="h-full w-full rounded-md object-contain"
             draggable={false}
@@ -366,9 +424,7 @@ export function CardInteraction({
       </div>
 
       {/* Preview is portaled to <body> so it escapes any stacking contexts */}
-      {previewNode &&
-        typeof document !== 'undefined' &&
-        createPortal(previewNode, document.body)}
+      {previewNode && createPortal(previewNode, document.body)}
 
       {menu.visible && (
         <div
@@ -419,6 +475,16 @@ export function CardInteraction({
               >
                 Send to bottom of deck
               </button>
+
+              {allowHide && (
+                <button
+                  type="button"
+                  className="mt-0.5 block w-full cursor-pointer rounded px-2 py-1 text-left hover:bg-slate-700"
+                  onClick={handleMenuToggleHidden}
+                >
+                  {hidden ? 'Unhide card' : 'Hide card'}
+                </button>
+              )}
             </>
           )}
         </div>

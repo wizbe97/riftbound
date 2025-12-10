@@ -711,7 +711,7 @@ function GameBoardLayout({
 
     if (fromOwner !== mySeat || toOwner !== mySeat) return;
 
-    // Legend zone is immutable
+    // Legend zone is immutable (no moving)
     if (
       (fromZoneId as string) === 'p1LegendZone' ||
       (fromZoneId as string) === 'p2LegendZone'
@@ -946,6 +946,7 @@ function GameBoardLayout({
           const zoneOwner = getZoneOwnerFromId(cell.zoneId);
           const canInteractBase =
             mySeat !== null && zoneOwner !== null && mySeat === zoneOwner;
+          const isOwnerView = canInteractBase;
 
           const discardZone = isDiscardZoneId(cell.zoneId);
 
@@ -963,6 +964,18 @@ function GameBoardLayout({
             zoneIdStr === 'p1RuneDeck' || zoneIdStr === 'p2RuneDeck';
           const isMainDeckZone =
             zoneIdStr === 'p1Deck' || zoneIdStr === 'p2Deck';
+
+          const isBaseZone =
+            zoneIdStr === 'p1Base' || zoneIdStr === 'p2Base';
+          const isBattleZone =
+            zoneIdStr === 'battlefieldLeftP1' ||
+            zoneIdStr === 'battlefieldLeftP2' ||
+            zoneIdStr === 'battlefieldRightP1' ||
+            zoneIdStr === 'battlefieldRightP2';
+
+          // Only allow Hide/Unhide in our OWN base + battlefield zones
+          const canHideHere =
+            canInteractBase && (isBaseZone || isBattleZone);
 
           const showRealCardsInRectZone =
             !isHandZone ||
@@ -1049,6 +1062,7 @@ function GameBoardLayout({
                       mode="discard-top"
                       disableRotate
                       disableContextMenu
+                      isOwnerView={isOwnerView}
                     />
                     <span className="rb-pile-count">{count}</span>
                   </div>
@@ -1078,12 +1092,17 @@ function GameBoardLayout({
           } else if (cardsInZone.length > 0) {
             if (cell.kind === 'card') {
               const zoneCard = cardsInZone[0];
-              const canInteract = canInteractBase && !isLegendZone; // legend immutable
+              // Legend: cannot move, but can rotate (for owner)
+              const canInteract = canInteractBase && !isLegendZone;
+              const canRotate = isLegendZone ? canInteractBase : undefined;
 
               innerContent = (
                 <CardInteraction
                   card={zoneCard.card}
                   canInteract={canInteract}
+                  canRotate={canRotate}
+                  allowHide={canHideHere}
+                  isOwnerView={isOwnerView}
                   lobbyId={lobbyId}
                   zoneId={cell.zoneId}
                   indexInZone={0}
@@ -1095,7 +1114,6 @@ function GameBoardLayout({
                   onSendToBottomOfDeck={
                     isLegendZone ? undefined : handleSendToBottomFromCard
                   }
-                  disableRotate={isLegendZone}
                 />
               );
             } else {
@@ -1184,6 +1202,8 @@ function GameBoardLayout({
                             <CardInteraction
                               card={zc.card}
                               canInteract={canInteract}
+                              allowHide={canHideHere}
+                              isOwnerView={isOwnerView}
                               lobbyId={lobbyId}
                               zoneId={cell.zoneId}
                               indexInZone={idx}
@@ -1552,6 +1572,7 @@ function DiscardPileModal({
                 <CardInteraction
                   card={zc.card}
                   canInteract={canEdit}
+                  isOwnerView={canEdit}
                   lobbyId={lobbyId}
                   zoneId={discardZoneId}
                   indexInZone={index}
@@ -1716,6 +1737,7 @@ function DeckManageModal({
                 <CardInteraction
                   card={card}
                   canInteract={false}
+                  isOwnerView={canEdit}
                   lobbyId={lobbyId}
                   zoneId={deckZoneId}
                   indexInZone={index}
