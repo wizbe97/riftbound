@@ -1,9 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useRef,
+} from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { useParams } from 'react-router-dom';
-
 import '../styles/gameplay.css';
-
 import type { BoardZoneId } from '../game/boardConfig';
 import {
   useMatchGameState,
@@ -12,10 +14,10 @@ import {
   type ZoneCard,
 } from '../game/useMatchGameState';
 import { MatchDeckSelectOverlay } from './MatchDeckSelectPage';
-
 import runeBackImg from '../assets/rune-back.png';
 import cardBackImg from '../assets/back-of-card.jpg';
 import { CardInteraction } from '../components/CardInteraction';
+import type { RiftboundCard } from '../data/riftboundCards';
 
 export type ZoneVisualKind = 'card' | 'rectWide';
 
@@ -101,6 +103,14 @@ function MatchGamePage() {
     p2Score,
     incrementScore,
     decrementScore,
+    p1MainDeckCards,
+    p2MainDeckCards,
+    shuffleMainDeck,
+    shuffleRuneDeck,
+    p1Reveals,
+    p2Reveals,
+    syncRevealsForSeat,
+    clearRevealsForSeat,
   } = useMatchGameState(lobbyId);
 
   if (!user) {
@@ -353,6 +363,13 @@ function MatchGamePage() {
     decrementScore(mySeat);
   };
 
+  const opponentRevealedCards: RiftboundCard[] =
+    mySeat === 'p1'
+      ? p2Reveals
+      : mySeat === 'p2'
+      ? p1Reveals
+      : [];
+
   return (
     <>
       <section className="rb-game-root flex flex-col">
@@ -391,6 +408,13 @@ function MatchGamePage() {
                 decrementMyScore={decrementMyScore}
                 canEditTopScore={canEditTopScore}
                 canEditBottomScore={canEditBottomScore}
+                p1MainDeckCards={p1MainDeckCards}
+                p2MainDeckCards={p2MainDeckCards}
+                shuffleMainDeck={shuffleMainDeck}
+                shuffleRuneDeck={shuffleRuneDeck}
+                syncRevealsForSeat={syncRevealsForSeat}
+                clearRevealsForSeat={clearRevealsForSeat}
+                opponentRevealedCards={opponentRevealedCards}
               />
             </div>
           </div>
@@ -449,6 +473,13 @@ type GameBoardLayoutProps = {
   decrementMyScore: () => void;
   canEditTopScore: boolean;
   canEditBottomScore: boolean;
+  p1MainDeckCards: RiftboundCard[];
+  p2MainDeckCards: RiftboundCard[];
+  shuffleMainDeck: (seat: PlayerSeat) => void;
+  shuffleRuneDeck: (seat: PlayerSeat) => void;
+  syncRevealsForSeat: (seat: PlayerSeat, count: number) => void;
+  clearRevealsForSeat: (seat: PlayerSeat) => void;
+  opponentRevealedCards: RiftboundCard[];
 };
 
 function getRowMarginTop(row: number): number {
@@ -491,6 +522,22 @@ type DiscardModalState = {
   ownerName: string;
 };
 
+type DeckMenuState = {
+  visible: boolean;
+  x: number;
+  y: number;
+  zoneId: BoardZoneId | null;
+  ownerSeat: PlayerSeat | null;
+  ownerName: string;
+  isRuneDeck: boolean;
+};
+
+type DeckManageModalState = {
+  open: boolean;
+  ownerSeat: PlayerSeat | null;
+  ownerName: string;
+};
+
 function GameBoardLayout({
   layoutCells,
   zoneCards,
@@ -512,8 +559,16 @@ function GameBoardLayout({
   decrementMyScore,
   canEditTopScore,
   canEditBottomScore,
+  p1MainDeckCards,
+  p2MainDeckCards,
+  shuffleMainDeck,
+  shuffleRuneDeck,
+  syncRevealsForSeat,
+  clearRevealsForSeat,
+  opponentRevealedCards,
 }: GameBoardLayoutProps) {
   const [windowSize, setWindowSize] = useState({ width: 0, height: 0 });
+
   const [discardMenu, setDiscardMenu] = useState<DiscardMenuState>({
     visible: false,
     x: 0,
@@ -522,16 +577,36 @@ function GameBoardLayout({
     ownerSeat: null,
     ownerName: '',
   });
+
   const [discardModal, setDiscardModal] = useState<DiscardModalState>({
     open: false,
     zoneId: null,
     ownerSeat: null,
     ownerName: '',
   });
+
+  const [deckMenu, setDeckMenu] = useState<DeckMenuState>({
+    visible: false,
+    x: 0,
+    y: 0,
+    zoneId: null,
+    ownerSeat: null,
+    ownerName: '',
+    isRuneDeck: false,
+  });
+
+  const [deckManageModal, setDeckManageModal] =
+    useState<DeckManageModalState>({
+      open: false,
+      ownerSeat: null,
+      ownerName: '',
+    });
+
   const [topScoreFlash, setTopScoreFlash] = useState(false);
   const [bottomScoreFlash, setBottomScoreFlash] = useState(false);
 
   const discardMenuRef = useRef<HTMLDivElement | null>(null);
+  const deckMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Close discard cell menu
   useEffect(() => {
@@ -540,7 +615,6 @@ function GameBoardLayout({
     const handleDocMouseDown = (e: MouseEvent) => {
       const target = e.target as Node | null;
       if (!target) return;
-
       if (discardMenuRef.current?.contains(target)) return;
 
       setDiscardMenu((prev) => ({ ...prev, visible: false }));
@@ -550,12 +624,31 @@ function GameBoardLayout({
     return () => document.removeEventListener('mousedown', handleDocMouseDown);
   }, [discardMenu.visible]);
 
-  // Window size for hand fan overlap logic
+  // Close deck cell menu
+  useEffect(() => {
+    if (!deckMenu.visible) return;
+
+    const handleDocMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (deckMenuRef.current?.contains(target)) return;
+
+      setDeckMenu((prev) => ({ ...prev, visible: false }));
+    };
+
+    document.addEventListener('mousedown', handleDocMouseDown);
+    return () => document.removeEventListener('mousedown', handleDocMouseDown);
+  }, [deckMenu.visible]);
+
+  // Window size for hand / rune fan overlap logic
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
     const handleResize = () => {
-      setWindowSize({ width: window.innerWidth, height: window.innerHeight });
+      setWindowSize({
+        width: window.innerWidth,
+        height: window.innerHeight,
+      });
     };
 
     handleResize();
@@ -597,17 +690,19 @@ function GameBoardLayout({
     const raw = e.dataTransfer.getData('application/json');
     if (!raw) return;
 
-    let payload: { fromZoneId: BoardZoneId; fromIndex: number } | null = null;
+    let payload: { fromZoneId: BoardZoneId; fromIndex: number } | null =
+      null;
+
     try {
       payload = JSON.parse(raw);
     } catch {
       return;
     }
+
     if (!payload) return;
 
     const { fromZoneId, fromIndex } = payload;
     const toZoneId = cell.zoneId;
-
     if (fromZoneId === toZoneId) return;
     if (!mySeat) return;
 
@@ -653,10 +748,8 @@ function GameBoardLayout({
   ) => {
     const owner = getZoneOwnerFromId(zoneId);
     if (!owner) return;
-
     const discardZoneId: BoardZoneId =
       owner === 'p1' ? 'p1Discard' : 'p2Discard';
-
     sendCardToDiscard(zoneId, index, discardZoneId);
   };
 
@@ -666,9 +759,8 @@ function GameBoardLayout({
   ) => {
     const owner = getZoneOwnerFromId(zoneId);
     if (!owner) return;
-
-    const deckZoneId: BoardZoneId = owner === 'p1' ? 'p1Deck' : 'p2Deck';
-
+    const deckZoneId: BoardZoneId =
+      owner === 'p1' ? 'p1Deck' : 'p2Deck';
     sendCardToBottomOfDeck(zoneId, index, deckZoneId);
   };
 
@@ -678,10 +770,8 @@ function GameBoardLayout({
   ) => {
     const owner = getZoneOwnerFromId(zoneId);
     if (!owner) return;
-
     const runeDeckZoneId: BoardZoneId =
       owner === 'p1' ? 'p1RuneDeck' : 'p2RuneDeck';
-
     sendCardToBottomOfDeck(zoneId, index, runeDeckZoneId);
   };
 
@@ -726,14 +816,12 @@ function GameBoardLayout({
 
   const openDiscardModalFromMenu = () => {
     if (!discardMenu.zoneId) return;
-
     setDiscardModal({
       open: true,
       zoneId: discardMenu.zoneId,
       ownerSeat: discardMenu.ownerSeat,
       ownerName: discardMenu.ownerName,
     });
-
     setDiscardMenu((prev) => ({ ...prev, visible: false }));
   };
 
@@ -744,6 +832,75 @@ function GameBoardLayout({
       ownerSeat: null,
       ownerName: '',
     });
+  };
+
+  const openDeckMenu = (
+    clientX: number,
+    clientY: number,
+    cell: LayoutCell,
+    zoneOwner: PlayerSeat | null,
+    isRuneDeck: boolean,
+  ) => {
+    if (!zoneOwner) return;
+    if (!mySeat || mySeat !== zoneOwner) return;
+
+    const ownerName = zoneOwner === 'p1' ? p1Name : p2Name;
+
+    setDeckMenu({
+      visible: true,
+      x: clientX,
+      y: clientY,
+      zoneId: cell.zoneId,
+      ownerSeat: zoneOwner,
+      ownerName:
+        ownerName || (zoneOwner === 'p1' ? 'Player 1' : 'Player 2'),
+      isRuneDeck,
+    });
+  };
+
+  const handleDeckCellContextMenu = (
+    e: React.MouseEvent<HTMLDivElement>,
+    cell: LayoutCell,
+    zoneOwner: PlayerSeat | null,
+    isRuneDeck: boolean,
+  ) => {
+    e.preventDefault();
+    openDeckMenu(e.clientX, e.clientY, cell, zoneOwner, isRuneDeck);
+  };
+
+  const handleDeckMenuShuffle = () => {
+    if (!deckMenu.ownerSeat) return;
+    if (deckMenu.isRuneDeck) {
+      shuffleRuneDeck(deckMenu.ownerSeat);
+    } else {
+      shuffleMainDeck(deckMenu.ownerSeat);
+    }
+    setDeckMenu((prev) => ({ ...prev, visible: false }));
+  };
+
+  const openDeckManageModalFromMenu = () => {
+    if (!deckMenu.ownerSeat || deckMenu.isRuneDeck) return;
+    setDeckManageModal({
+      open: true,
+      ownerSeat: deckMenu.ownerSeat,
+      ownerName: deckMenu.ownerName,
+    });
+    setDeckMenu((prev) => ({ ...prev, visible: false }));
+  };
+
+  const closeDeckManageModal = () => {
+    setDeckManageModal({
+      open: false,
+      ownerSeat: null,
+      ownerName: '',
+    });
+  };
+
+  const handleDeckManageClose = () => {
+    if (deckManageModal.ownerSeat) {
+      clearRevealsForSeat(deckManageModal.ownerSeat);
+    }
+    closeDeckManageModal();
   };
 
   return (
@@ -775,11 +932,11 @@ function GameBoardLayout({
 
           const base =
             'relative flex items-center justify-center rounded-xl border border-amber-500/40 ' +
-            (cell.kind === 'rectWide'
-              ? 'overflow-hidden'
-              : 'overflow-visible');
+            (cell.kind === 'rectWide' ? 'overflow-hidden' : 'overflow-visible');
 
-          const paddingClass = cell.kind === 'card' ? 'p-0' : 'px-3';
+          const paddingClass =
+            cell.kind === 'card' ? 'p-0' : 'px-3';
+
           const kindClass =
             cell.kind === 'card'
               ? 'rb-zone-card-slot-inner bg-slate-900/60'
@@ -787,33 +944,38 @@ function GameBoardLayout({
 
           const cardsInZone = zoneCards[cell.zoneId] ?? [];
           const zoneOwner = getZoneOwnerFromId(cell.zoneId);
-
           const canInteractBase =
             mySeat !== null && zoneOwner !== null && mySeat === zoneOwner;
 
           const discardZone = isDiscardZoneId(cell.zoneId);
+
+          const zoneIdStr = cell.zoneId as string;
           const isHandZone =
-            (cell.zoneId as string) === 'p1Hand' ||
-            (cell.zoneId as string) === 'p2Hand';
+            zoneIdStr === 'p1Hand' || zoneIdStr === 'p2Hand';
           const isRuneChannelZone =
-            (cell.zoneId as string) === 'p1RuneChannel' ||
-            (cell.zoneId as string) === 'p2RuneChannel';
+            zoneIdStr === 'p1RuneChannel' ||
+            zoneIdStr === 'p2RuneChannel';
           const isLegendZone =
-            (cell.zoneId as string) === 'p1LegendZone' ||
-            (cell.zoneId as string) === 'p2LegendZone';
+            zoneIdStr === 'p1LegendZone' ||
+            zoneIdStr === 'p2LegendZone';
+
+          const isRuneDeckZone =
+            zoneIdStr === 'p1RuneDeck' || zoneIdStr === 'p2RuneDeck';
+          const isMainDeckZone =
+            zoneIdStr === 'p1Deck' || zoneIdStr === 'p2Deck';
 
           const showRealCardsInRectZone =
-            !isHandZone || (mySeat !== null && zoneOwner === mySeat);
+            !isHandZone ||
+            (mySeat !== null && zoneOwner === mySeat);
 
           let innerContent: ReactNode = null;
 
           // Rune piles
-          if (
-            (cell.zoneId as string) === 'p1RuneDeck' ||
-            (cell.zoneId as string) === 'p2RuneDeck'
-          ) {
-            const isP1Rune = (cell.zoneId as string) === 'p1RuneDeck';
-            const count = isP1Rune ? pileCounts.p1Rune : pileCounts.p2Rune;
+          if (isRuneDeckZone) {
+            const isP1Rune = zoneIdStr === 'p1RuneDeck';
+            const count = isP1Rune
+              ? pileCounts.p1Rune
+              : pileCounts.p2Rune;
             const ownerSeat: PlayerSeat = isP1Rune ? 'p1' : 'p2';
             const canDraw =
               mySeat !== null && mySeat === ownerSeat && count > 0;
@@ -837,11 +999,8 @@ function GameBoardLayout({
                 </div>
               );
             }
-          } else if (
-            (cell.zoneId as string) === 'p1Deck' ||
-            (cell.zoneId as string) === 'p2Deck'
-          ) {
-            const isP1 = (cell.zoneId as string) === 'p1Deck';
+          } else if (zoneIdStr === 'p1Deck' || zoneIdStr === 'p2Deck') {
+            const isP1 = zoneIdStr === 'p1Deck';
             const count = isP1 ? pileCounts.p1Deck : pileCounts.p2Deck;
             const deckOwner: PlayerSeat = isP1 ? 'p1' : 'p2';
             const canDraw =
@@ -875,7 +1034,8 @@ function GameBoardLayout({
               const topZc = discardCards[topIndex];
 
               if (mySeat && zoneOwner && mySeat === zoneOwner) {
-                // Our discard: top card is draggable with preview, no rotation, no card menu
+                // Our discard: top card is draggable with preview,
+                // no rotation, no card menu
                 innerContent = (
                   <div className="rb-pile-inner cursor-pointer">
                     <CardInteraction
@@ -941,7 +1101,7 @@ function GameBoardLayout({
             } else {
               const count = cardsInZone.length;
 
-              // Shared fan/overlap logic for hands AND rune channels
+              // Base overlap for non-rune zones
               let overlapPx = 0;
               if (count > maxFullWidthCards) {
                 const overflow = count - maxFullWidthCards;
@@ -955,17 +1115,45 @@ function GameBoardLayout({
                   <div className="flex h-full items-center justify-center">
                     {cardsInZone.map((zc, idx) => {
                       const isRuneCardInChannel = isRuneChannelZone;
-                      let marginLeft = 0;
 
+                      let marginLeft = 0;
                       if (idx !== 0 && count > 1) {
-                        // Fan for all rect-wide zones (hand + rune channel)
-                        marginLeft = overlapPx;
+                        if (isRuneCardInChannel) {
+                          const isBigScreen =
+                            windowSize.width >= 1960 &&
+                            windowSize.height >= 1080;
+                          const runeThreshold = isBigScreen ? 10 : 8;
+                          const baseSpacing = 4; // tighter spacing for small rune counts
+
+                          if (count <= runeThreshold) {
+                            marginLeft = baseSpacing;
+                          } else {
+                            // Gradually reduce spacing (and eventually overlap)
+                            const maxNegative = -40;
+                            const steps = Math.max(
+                              1,
+                              12 - runeThreshold,
+                            );
+                            const t =
+                              (count - runeThreshold) / steps; // 0..1
+                            const spacing =
+                              baseSpacing +
+                              t * (maxNegative - baseSpacing);
+                            marginLeft = spacing;
+                          }
+                        } else {
+                          marginLeft = overlapPx;
+                        }
                       }
 
-                      const canInteract = canInteractBase && !isLegendZone;
+                      const canInteract =
+                        canInteractBase && !isLegendZone;
 
                       // Hand: hide opponent cards
-                      if (isHandZone && !showRealCardsInRectZone) {
+                      if (
+                        isHandZone &&
+                        !showRealCardsInRectZone
+                      ) {
                         return (
                           <div
                             key={`${cell.zoneId}-${idx}-${zc.card.id}`}
@@ -982,14 +1170,15 @@ function GameBoardLayout({
                         );
                       }
 
-                      // Left-most should be on top: reverse z-index ordering
-                      const zIndex = 10 + (count - idx);
-
                       return (
                         <div
                           key={`${cell.zoneId}-${idx}-${zc.card.id}`}
                           className="rb-zone-card-slot-inner"
-                          style={{ marginLeft, zIndex }}
+                          style={{
+                            marginLeft,
+                            // Left-most card should be on top when fanning
+                            zIndex: 10 + (count - idx),
+                          }}
                         >
                           <div className="relative h-full w-full">
                             <CardInteraction
@@ -1009,19 +1198,15 @@ function GameBoardLayout({
                                   : handleSendToBottomFromCard
                               }
                               mode={
-                                isRuneCardInChannel ? 'rune' : 'default'
+                                isRuneCardInChannel
+                                  ? 'rune'
+                                  : 'default'
                               }
                               overlay={
-                                isRuneCardInChannel &&
-                                canInteract && (
+                                isRuneCardInChannel && canInteract ? (
                                   <button
                                     type="button"
-                                    className="rb-rune-recycle-btn"
-                                    style={{
-                                      top: '4px',
-                                      left: '4px',
-                                      right: 'auto',
-                                    }}
+                                    className="absolute left-1 top-1 z-20 flex h-6 w-6 items-center justify-center rounded-full border border-slate-600 bg-slate-950/90 text-[11px] text-slate-100 shadow hover:border-amber-400 hover:text-amber-200"
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       handleSendRuneToBottomFromCard(
@@ -1032,7 +1217,7 @@ function GameBoardLayout({
                                   >
                                     ↻
                                   </button>
-                                )
+                                ) : undefined
                               }
                             />
                           </div>
@@ -1047,6 +1232,35 @@ function GameBoardLayout({
 
           const isDiscardCell = discardZone;
 
+          const onContextMenu = (
+            e: React.MouseEvent<HTMLDivElement>,
+          ) => {
+            if (isDiscardCell) {
+              handleDiscardCellContextMenu(e, cell, zoneOwner);
+              return;
+            }
+
+            const idStr = cell.zoneId as string;
+            const isRuneDeckCell =
+              idStr === 'p1RuneDeck' || idStr === 'p2RuneDeck';
+            const isMainDeckCell =
+              idStr === 'p1Deck' || idStr === 'p2Deck';
+
+            if (
+              (isRuneDeckCell || isMainDeckCell) &&
+              zoneOwner &&
+              mySeat &&
+              mySeat === zoneOwner
+            ) {
+              handleDeckCellContextMenu(
+                e,
+                cell,
+                zoneOwner,
+                isRuneDeckCell,
+              );
+            }
+          };
+
           return (
             <div
               key={cell.id}
@@ -1057,15 +1271,10 @@ function GameBoardLayout({
               data-zone-id={cell.zoneId}
               onDragOver={(e) => handleDragOverCell(e, cell)}
               onDrop={(e) => handleDropOnCell(e, cell)}
-              onContextMenu={
+              onContextMenu={onContextMenu}
+              onClick={(e) =>
                 isDiscardCell
-                  ? (e) =>
-                      handleDiscardCellContextMenu(e, cell, zoneOwner)
-                  : undefined
-              }
-              onClick={
-                isDiscardCell
-                  ? (e) => handleDiscardCellClick(e, cell, zoneOwner)
+                  ? handleDiscardCellClick(e, cell, zoneOwner)
                   : undefined
               }
             >
@@ -1172,10 +1381,11 @@ function GameBoardLayout({
         </div>
       </div>
 
+      {/* Discard cell context menu */}
       {discardMenu.visible && discardMenu.zoneId && (
         <div
           ref={discardMenuRef}
-          className="fixed z-[110] rounded-md border border-slate-600 bg-slate-900/95 px-2 py-1 text-xs text-slate-100 shadow-lg"
+          className="fixed z-[160] rounded-md border border-slate-600 bg-slate-900/95 px-2 py-1 text-xs text-slate-100 shadow-lg"
           style={{ top: discardMenu.y, left: discardMenu.x }}
         >
           <button
@@ -1188,6 +1398,34 @@ function GameBoardLayout({
         </div>
       )}
 
+      {/* Main deck / rune deck context menu */}
+      {deckMenu.visible && deckMenu.zoneId && (
+        <div
+          ref={deckMenuRef}
+          className="fixed z-[170] rounded-md border border-slate-600 bg-slate-900/95 px-2 py-1 text-xs text-slate-100 shadow-lg"
+          style={{ top: deckMenu.y, left: deckMenu.x }}
+        >
+          <button
+            type="button"
+            className="block w-full cursor-pointer rounded px-2 py-1 text-left hover:bg-slate-700"
+            onClick={handleDeckMenuShuffle}
+          >
+            {deckMenu.isRuneDeck ? 'Shuffle runes' : 'Shuffle deck'}
+          </button>
+
+          {!deckMenu.isRuneDeck && (
+            <button
+              type="button"
+              className="mt-0.5 block w-full cursor-pointer rounded px-2 py-1 text-left hover:bg-slate-700"
+              onClick={openDeckManageModalFromMenu}
+            >
+              Manage cards
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Discard pile modal */}
       {discardModal.open && discardModal.zoneId && (
         <DiscardPileModal
           isOpen={discardModal.open}
@@ -1204,6 +1442,40 @@ function GameBoardLayout({
           moveCardFromDiscardToHand={moveCardFromDiscardToHand}
         />
       )}
+
+      {/* Deck manage modal (for main deck) */}
+      {deckManageModal.open && deckManageModal.ownerSeat && (
+        <DeckManageModal
+          isOpen={deckManageModal.open}
+          onClose={handleDeckManageClose}
+          ownerSeat={deckManageModal.ownerSeat}
+          ownerName={deckManageModal.ownerName}
+          mySeat={mySeat}
+          cards={
+            deckManageModal.ownerSeat === 'p1'
+              ? p1MainDeckCards
+              : p2MainDeckCards
+          }
+          lobbyId={lobbyId}
+          onShuffle={() =>
+            shuffleMainDeck(deckManageModal.ownerSeat as PlayerSeat)
+          }
+          onRevealTopCount={(count, revealToOpponent) => {
+            if (
+              revealToOpponent &&
+              deckManageModal.ownerSeat
+            ) {
+              syncRevealsForSeat(
+                deckManageModal.ownerSeat as PlayerSeat,
+                count,
+              );
+            }
+          }}
+        />
+      )}
+
+      {/* Opponent reveal window */}
+      <OpponentRevealWindow cards={opponentRevealedCards} />
     </div>
   );
 }
@@ -1246,7 +1518,7 @@ function DiscardPileModal({
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-[180] flex items-center justify-center bg-black/60"
       onClick={onClose}
     >
       <div
@@ -1299,6 +1571,193 @@ function DiscardPileModal({
             ))}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+type DeckManageModalProps = {
+  isOpen: boolean;
+  onClose: () => void;
+  ownerSeat: PlayerSeat | null;
+  ownerName: string;
+  mySeat: PlayerSeat | null;
+  cards: RiftboundCard[];
+  lobbyId: string;
+  onShuffle: () => void;
+  onRevealTopCount: (count: number, revealToOpponent: boolean) => void;
+};
+
+function DeckManageModal({
+  isOpen,
+  onClose,
+  ownerSeat,
+  ownerName,
+  mySeat,
+  cards,
+  lobbyId,
+  onShuffle,
+  onRevealTopCount,
+}: DeckManageModalProps) {
+  const [showAll, setShowAll] = useState(false);
+  const [revealToOpponent, setRevealToOpponent] = useState(false);
+  const [revealedCards, setRevealedCards] = useState<RiftboundCard[]>([]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setShowAll(false);
+      setRevealToOpponent(false);
+      setRevealedCards([]);
+    }
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  const canEdit =
+    mySeat !== null && ownerSeat !== null && mySeat === ownerSeat;
+
+  const visibleCards = showAll ? cards : revealedCards;
+
+  const handleRevealClick = () => {
+    if (!cards.length) return;
+    const nextCount = Math.min(revealedCards.length + 1, cards.length);
+    const nextCards = cards.slice(0, nextCount);
+    setRevealedCards(nextCards);
+    onRevealTopCount(nextCount, revealToOpponent);
+  };
+
+  const deckZoneId: BoardZoneId =
+    ownerSeat === 'p1' ? 'p1Deck' : 'p2Deck';
+
+  return (
+    <div
+      className="fixed inset-0 z-[185] flex items-center justify-center bg-black/60"
+      onClick={onClose}
+    >
+      <div
+        className="relative max-h-[80vh] w-full max-w-xl rounded-xl border border-amber-500/60 bg-slate-950/95 p-4 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-amber-200">
+            Manage Deck — {ownerName}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-6 w-6 cursor-pointer items-center justify-center rounded-full border border-slate-600 bg-slate-900 text-xs text-slate-200 hover:border-amber-400 hover:text-amber-200"
+          >
+            ×
+          </button>
+        </div>
+
+        {!canEdit && (
+          <p className="mb-2 text-[11px] text-slate-400">
+            You can only manage your own deck.
+          </p>
+        )}
+
+        <div className="mb-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-200">
+          <label className="inline-flex items-center gap-1">
+            <input
+              type="checkbox"
+              className="h-3 w-3 rounded border-slate-500 bg-slate-900"
+              checked={showAll}
+              onChange={(e) => setShowAll(e.target.checked)}
+              disabled={!canEdit}
+            />
+            <span>Show all cards</span>
+          </label>
+
+          <button
+            type="button"
+            disabled={!canEdit || cards.length <= 1}
+            onClick={onShuffle}
+            className="inline-flex items-center justify-center rounded-md border border-amber-500/50 bg-slate-900 px-2 py-1 text-[11px] font-semibold text-amber-200 hover:border-amber-300 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Shuffle
+          </button>
+
+          <button
+            type="button"
+            disabled={!canEdit || cards.length === 0}
+            onClick={handleRevealClick}
+            className="inline-flex items-center justify-center rounded-md border border-emerald-500/60 bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-300 hover:border-emerald-300 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Reveal top card
+          </button>
+
+          <label className="inline-flex items-center gap-1">
+            <input
+              type="checkbox"
+              className="h-3 w-3 rounded border-slate-500 bg-slate-900"
+              checked={revealToOpponent}
+              onChange={(e) =>
+                setRevealToOpponent(e.target.checked)
+              }
+              disabled={!canEdit}
+            />
+            <span>Reveal to opponent</span>
+          </label>
+        </div>
+
+        {visibleCards.length === 0 ? (
+          <p className="mt-2 text-xs text-slate-300">
+            No cards to display yet. Use "Reveal top card", or tick
+            "Show all cards".
+          </p>
+        ) : (
+          <div className="mt-2 grid max-h-[60vh] grid-cols-4 gap-2 overflow-y-auto pr-1">
+            {visibleCards.map((card, index) => (
+              <div
+                key={`${card.id}-${index}`}
+                className="rb-zone-card-slot-inner cursor-pointer"
+              >
+                <CardInteraction
+                  card={card}
+                  canInteract={false}
+                  lobbyId={lobbyId}
+                  zoneId={deckZoneId}
+                  indexInZone={index}
+                  disableRotate
+                  disableContextMenu
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+type OpponentRevealWindowProps = {
+  cards: RiftboundCard[];
+};
+
+function OpponentRevealWindow({
+  cards,
+}: OpponentRevealWindowProps) {
+  if (!cards.length) return null;
+
+  return (
+    <div className="pointer-events-none fixed inset-0 z-[190] flex items-center justify-center">
+      <div className="pointer-events-auto rounded-xl border border-amber-500/60 bg-slate-950/95 px-3 py-2 shadow-2xl">
+        <div className="mb-2 text-center text-[11px] text-slate-200">
+          Opponent revealed {cards.length} card
+          {cards.length > 1 ? 's' : ''}
+        </div>
+        <div className="flex items-center justify-center gap-2">
+          {cards.map((card, idx) => (
+            <img
+              key={`${card.id}-reveal-${idx}`}
+              src={card.images.small}
+              alt={card.name}
+              className="h-24 w-auto rounded-md border border-amber-500/60 bg-slate-900 object-contain"
+              draggable={false}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );

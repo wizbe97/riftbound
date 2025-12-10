@@ -112,7 +112,6 @@ export function CardInteraction({
     const handleDocMouseDown = (e: MouseEvent) => {
       const target = e.target as Node | null;
       if (!target) return;
-
       if (menuRef.current?.contains(target)) return;
       if (rootRef.current?.contains(target)) return;
 
@@ -133,6 +132,7 @@ export function CardInteraction({
     const MARGIN = 16;
 
     const cardCenterX = rect.left + rect.width / 2;
+
     let top = 0;
     let left = 0;
 
@@ -145,7 +145,6 @@ export function CardInteraction({
     } else {
       const aboveTop = rect.top - MARGIN - PREVIEW_HEIGHT;
       const aboveFits = aboveTop >= MARGIN;
-
       if (aboveFits) {
         top = aboveTop;
         left = cardCenterX - PREVIEW_WIDTH / 2;
@@ -348,7 +347,7 @@ export function CardInteraction({
       {menu.visible && (
         <div
           ref={menuRef}
-          className="fixed z-[120] rounded-md border border-slate-600 bg-slate-900/95 px-2 py-1 text-xs text-slate-100 shadow-lg"
+          className="fixed z-[200] rounded-md border border-slate-600 bg-slate-900/95 px-2 py-1 text-xs text-slate-100 shadow-lg"
           style={{ top: menu.y, left: menu.x }}
         >
           {isDiscardModal ? (

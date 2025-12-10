@@ -115,14 +115,17 @@ type WirePlayerCardLists = {
   discard: string[];
 };
 
+type MatchRevealsWire = {
+  p1?: string[];
+  p2?: string[];
+};
+
 type MatchStateDoc = {
   p1Lists: WirePlayerCardLists | null;
   p2Lists: WirePlayerCardLists | null;
   zoneCards: WireZoneCardMap;
-  scores?: {
-    p1: number;
-    p2: number;
-  };
+  scores?: { p1: number; p2: number };
+  reveals?: MatchRevealsWire;
 };
 
 // ---------- Pure helpers (no React here) ----------
@@ -134,8 +137,10 @@ function mapLobby(id: string, data: DocumentData): Lobby {
     sideboard: !!rawRules.sideboard,
   };
 
-  const rawP1Deck = (data.p1Deck ?? null) as Partial<SelectedDeckInfo> | null;
-  const rawP2Deck = (data.p2Deck ?? null) as Partial<SelectedDeckInfo> | null;
+  const rawP1Deck =
+    (data.p1Deck ?? null) as Partial<SelectedDeckInfo> | null;
+  const rawP2Deck =
+    (data.p2Deck ?? null) as Partial<SelectedDeckInfo> | null;
 
   const p1Deck: SelectedDeckInfo | null = rawP1Deck
     ? {
@@ -256,10 +261,16 @@ function logCardRemovalAndLists(
   const summary =
     `${removedMsg}\n` +
     `[${seatLabel}] Legend list: ${stringifyCardList(lists.legend)}\n` +
-    `[${seatLabel}] Champion list: ${stringifyCardList(lists.chosenChampion)}\n` +
-    `[${seatLabel}] Battlefield list: ${stringifyCardList(lists.battlefields)}\n` +
+    `[${seatLabel}] Champion list: ${stringifyCardList(
+      lists.chosenChampion,
+    )}\n` +
+    `[${seatLabel}] Battlefield list: ${stringifyCardList(
+      lists.battlefields,
+    )}\n` +
     `[${seatLabel}] Runes list: ${stringifyCardList(lists.runes)}\n` +
-    `[${seatLabel}] Main deck list: ${stringifyCardList(lists.mainDeck)}\n` +
+    `[${seatLabel}] Main deck list: ${stringifyCardList(
+      lists.mainDeck,
+    )}\n` +
     `[${seatLabel}] Discard list: ${stringifyCardList(lists.discard)}`;
 
   // eslint-disable-next-line no-console
@@ -273,7 +284,6 @@ function toWirePlayerLists(
 ): WirePlayerCardLists | null {
   if (!lists) return null;
   const toIds = (cards: RiftboundCard[]): string[] => cards.map((c) => c.id);
-
   return {
     legend: toIds(lists.legend),
     chosenChampion: toIds(lists.chosenChampion),
@@ -329,15 +339,52 @@ function fromWireZoneCards(
     BoardZoneId,
     WireZoneCard[],
   ][]) {
-    result[zoneId] = arr
-      .map((w) => {
-        const card = cardById.get(w.cardId);
-        if (!card) return null;
-        return { card, ownerSeat: w.ownerSeat };
-      })
-      .filter((x): x is ZoneCard => x !== null);
+    result[zoneId] =
+      arr
+        .map((w) => {
+          const card = cardById.get(w.cardId);
+          if (!card) return null;
+          return { card, ownerSeat: w.ownerSeat };
+        })
+        .filter((x): x is ZoneCard => x !== null) ?? [];
   }
   return result;
+}
+
+function toWireReveals(
+  p1: RiftboundCard[],
+  p2: RiftboundCard[],
+): MatchRevealsWire {
+  return {
+    p1: p1.map((c) => c.id),
+    p2: p2.map((c) => c.id),
+  };
+}
+
+function fromWireReveals(
+  wire: MatchRevealsWire | undefined,
+  cardById: Map<string, RiftboundCard>,
+): { p1: RiftboundCard[]; p2: RiftboundCard[] } {
+  if (!wire) return { p1: [], p2: [] };
+
+  const toCards = (ids: string[]): RiftboundCard[] =>
+    ids
+      .map((id) => cardById.get(id) ?? null)
+      .filter((c): c is RiftboundCard => c !== null);
+
+  return {
+    p1: wire.p1 ? toCards(wire.p1) : [],
+    p2: wire.p2 ? toCards(wire.p2) : [],
+  };
+}
+
+function shuffleArray<T>(arr: T[]): T[] {
+  const copy = [...arr];
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
 }
 
 // ---------- Hook: all non-layout match logic lives here ----------
@@ -351,17 +398,25 @@ export function useMatchGameState(lobbyId?: string) {
 
   const [lobby, setLobby] = useState<Lobby | null>(null);
   const [loadingLobby, setLoadingLobby] = useState(true);
+
   const [p1DeckDoc, setP1DeckDoc] = useState<DeckDoc | null>(null);
   const [p2DeckDoc, setP2DeckDoc] = useState<DeckDoc | null>(null);
   const [loadingDecks, setLoadingDecks] = useState(false);
+
   const [p1Lists, setP1Lists] = useState<PlayerCardLists | null>(null);
   const [p2Lists, setP2Lists] = useState<PlayerCardLists | null>(null);
+
   const [zoneCards, setZoneCards] = useState<ZoneCardMap>({});
+
   const [hasDealtP1, setHasDealtP1] = useState(false);
   const [hasDealtP2, setHasDealtP2] = useState(false);
 
   const [p1Score, setP1Score] = useState(0);
   const [p2Score, setP2Score] = useState(0);
+
+  // Cards revealed to the opponent (per player)
+  const [p1Reveals, setP1Reveals] = useState<RiftboundCard[]>([]);
+  const [p2Reveals, setP2Reveals] = useState<RiftboundCard[]>([]);
 
   // Per-hook instance ID (debug)
   const instanceIdRef = useRef<string>('');
@@ -389,14 +444,15 @@ export function useMatchGameState(lobbyId?: string) {
 
   // Debug: log mount / unmount
   useEffect(() => {
+    // eslint-disable-next-line no-console
     console.log(
       '[useMatchGameState] mounted instance',
       instanceIdRef.current,
       'for lobbyId =',
       lobbyId,
     );
-
     return () => {
+      // eslint-disable-next-line no-console
       console.log(
         '[useMatchGameState] unmounted instance',
         instanceIdRef.current,
@@ -410,7 +466,6 @@ export function useMatchGameState(lobbyId?: string) {
     if (!lobbyId) return;
 
     const lobbyRef = doc(db, 'lobbies', lobbyId);
-
     const unsub = onSnapshot(
       lobbyRef,
       (snap) => {
@@ -428,6 +483,7 @@ export function useMatchGameState(lobbyId?: string) {
         }
 
         const mapped = mapLobby(snap.id, snap.data());
+        // eslint-disable-next-line no-console
         console.log(
           '[useMatchGameState]',
           instanceIdRef.current,
@@ -488,7 +544,6 @@ export function useMatchGameState(lobbyId?: string) {
 
     const load = async () => {
       setLoadingDecks(true);
-
       try {
         console.log(
           '[useMatchGameState]',
@@ -504,7 +559,6 @@ export function useMatchGameState(lobbyId?: string) {
             'Fetching P1 deck',
             lobby.p1Deck,
           );
-
           const p1Ref = doc(
             db,
             'users',
@@ -513,7 +567,6 @@ export function useMatchGameState(lobbyId?: string) {
             lobby.p1Deck.deckId,
           );
           const p1Snap = await getDoc(p1Ref);
-
           if (p1Snap.exists()) {
             const deck = p1Snap.data() as DeckDoc;
             console.log(
@@ -547,7 +600,6 @@ export function useMatchGameState(lobbyId?: string) {
             'Fetching P2 deck',
             lobby.p2Deck,
           );
-
           const p2Ref = doc(
             db,
             'users',
@@ -556,7 +608,6 @@ export function useMatchGameState(lobbyId?: string) {
             lobby.p2Deck.deckId,
           );
           const p2Snap = await getDoc(p2Ref);
-
           if (p2Snap.exists()) {
             const deck = p2Snap.data() as DeckDoc;
             console.log(
@@ -597,7 +648,7 @@ export function useMatchGameState(lobbyId?: string) {
     };
 
     void load();
-  }, [lobby]);
+  }, [lobby, cardById]);
 
   // Build P1 lists (local initial state)
   useEffect(() => {
@@ -663,7 +714,6 @@ export function useMatchGameState(lobbyId?: string) {
       if (!lobbyId) return;
 
       const zoneStr = toZoneId as string;
-
       if (
         zoneStr === 'p1Hand' ||
         zoneStr === 'p2Hand' ||
@@ -683,7 +733,11 @@ export function useMatchGameState(lobbyId?: string) {
           'rotations',
           `${toZoneId}-${card.id}-${indexInZone}`,
         );
-        await setDoc(rotationRef, { rotation: 90 }, { merge: true });
+        await setDoc(
+          rotationRef,
+          { rotation: 90 },
+          { merge: true },
+        );
       } catch (err) {
         // eslint-disable-next-line no-console
         console.error(
@@ -705,9 +759,10 @@ export function useMatchGameState(lobbyId?: string) {
       newZoneCards: ZoneCardMap,
       newP1Score: number,
       newP2Score: number,
+      newP1Reveals: RiftboundCard[],
+      newP2Reveals: RiftboundCard[],
     ) => {
       if (!matchStateRef) return;
-
       try {
         const payload: MatchStateDoc = {
           p1Lists: toWirePlayerLists(newP1Lists),
@@ -717,6 +772,7 @@ export function useMatchGameState(lobbyId?: string) {
             p1: newP1Score,
             p2: newP2Score,
           },
+          reveals: toWireReveals(newP1Reveals, newP2Reveals),
         };
 
         await setDoc(matchStateRef, payload, { merge: false });
@@ -747,10 +803,13 @@ export function useMatchGameState(lobbyId?: string) {
       const nextP1 = fromWirePlayerLists(data.p1Lists, cardById);
       const nextP2 = fromWirePlayerLists(data.p2Lists, cardById);
       const nextZones = fromWireZoneCards(data.zoneCards, cardById);
+      const nextReveals = fromWireReveals(data.reveals, cardById);
 
       setP1Lists(nextP1);
       setP2Lists(nextP2);
       setZoneCards(nextZones);
+      setP1Reveals(nextReveals.p1);
+      setP2Reveals(nextReveals.p2);
 
       if (data.scores) {
         setP1Score(typeof data.scores.p1 === 'number' ? data.scores.p1 : 0);
@@ -817,7 +876,10 @@ export function useMatchGameState(lobbyId?: string) {
         next,
         p1Score,
         p2Score,
+        p1Reveals,
+        p2Reveals,
       );
+
       return next;
     });
 
@@ -834,9 +896,18 @@ export function useMatchGameState(lobbyId?: string) {
       instanceIdRef.current,
       'Dealt initial P1 legend/champion',
     );
-
     setHasDealtP1(true);
-  }, [hasDealtP1, p1Lists, lobby, p2Lists, syncMatchStateToFirestore, p1Score, p2Score]);
+  }, [
+    hasDealtP1,
+    p1Lists,
+    lobby,
+    p2Lists,
+    syncMatchStateToFirestore,
+    p1Score,
+    p2Score,
+    p1Reveals,
+    p2Reveals,
+  ]);
 
   // Deal P2 legend + champion and sync to Firestore
   useEffect(() => {
@@ -894,7 +965,10 @@ export function useMatchGameState(lobbyId?: string) {
         next,
         p1Score,
         p2Score,
+        p1Reveals,
+        p2Reveals,
       );
+
       return next;
     });
 
@@ -911,9 +985,18 @@ export function useMatchGameState(lobbyId?: string) {
       instanceIdRef.current,
       'Dealt initial P2 legend/champion',
     );
-
     setHasDealtP2(true);
-  }, [hasDealtP2, p2Lists, lobby, p1Lists, syncMatchStateToFirestore, p1Score, p2Score]);
+  }, [
+    hasDealtP2,
+    p2Lists,
+    lobby,
+    p1Lists,
+    syncMatchStateToFirestore,
+    p1Score,
+    p2Score,
+    p1Reveals,
+    p2Reveals,
+  ]);
 
   // Which seat is "me"?
   const mySeat: PlayerSeat | null = useMemo(() => {
@@ -1011,7 +1094,10 @@ export function useMatchGameState(lobbyId?: string) {
           updatedZones,
           p1Score,
           p2Score,
+          p1Reveals,
+          p2Reveals,
         );
+
         return updatedZones;
       });
     },
@@ -1022,6 +1108,8 @@ export function useMatchGameState(lobbyId?: string) {
       syncMatchStateToFirestore,
       p1Score,
       p2Score,
+      p1Reveals,
+      p2Reveals,
     ],
   );
 
@@ -1044,11 +1132,11 @@ export function useMatchGameState(lobbyId?: string) {
           ...source.slice(0, fromIndex),
           ...source.slice(fromIndex + 1),
         ];
+
         const target = prevZones[toDiscardZoneId] ?? [];
         const newTarget = [...target, cardToMove];
 
         const updatedZones: ZoneCardMap = { ...prevZones };
-
         updatedZones[fromZoneId] = newSource;
         updatedZones[toDiscardZoneId] = newTarget;
 
@@ -1077,11 +1165,7 @@ export function useMatchGameState(lobbyId?: string) {
         if (newP2 !== p2Lists) setP2Lists(newP2);
 
         const newIndex = (updatedZones[toDiscardZoneId]?.length ?? 1) - 1;
-        void autoRotateCardOnMove(
-          cardToMove.card,
-          toDiscardZoneId,
-          newIndex,
-        );
+        void autoRotateCardOnMove(cardToMove.card, toDiscardZoneId, newIndex);
 
         void syncMatchStateToFirestore(
           newP1,
@@ -1089,6 +1173,8 @@ export function useMatchGameState(lobbyId?: string) {
           updatedZones,
           p1Score,
           p2Score,
+          p1Reveals,
+          p2Reveals,
         );
 
         console.log(
@@ -1110,6 +1196,8 @@ export function useMatchGameState(lobbyId?: string) {
       syncMatchStateToFirestore,
       p1Score,
       p2Score,
+      p1Reveals,
+      p2Reveals,
     ],
   );
 
@@ -1130,7 +1218,6 @@ export function useMatchGameState(lobbyId?: string) {
         ];
 
         const updatedZones: ZoneCardMap = { ...prevZones };
-
         updatedZones[fromZoneId] = newSource;
 
         const seat: PlayerSeat =
@@ -1182,6 +1269,8 @@ export function useMatchGameState(lobbyId?: string) {
           updatedZones,
           p1Score,
           p2Score,
+          p1Reveals,
+          p2Reveals,
         );
 
         console.log(
@@ -1198,7 +1287,15 @@ export function useMatchGameState(lobbyId?: string) {
         return updatedZones;
       });
     },
-    [p1Lists, p2Lists, syncMatchStateToFirestore, p1Score, p2Score],
+    [
+      p1Lists,
+      p2Lists,
+      syncMatchStateToFirestore,
+      p1Score,
+      p2Score,
+      p1Reveals,
+      p2Reveals,
+    ],
   );
 
   // Move a specific card from discard pile to bottom of deck
@@ -1218,7 +1315,6 @@ export function useMatchGameState(lobbyId?: string) {
         ];
 
         const updatedZones: ZoneCardMap = { ...prevZones };
-
         updatedZones[discardZoneId] = newSource;
 
         const seat: PlayerSeat =
@@ -1275,6 +1371,8 @@ export function useMatchGameState(lobbyId?: string) {
           updatedZones,
           p1Score,
           p2Score,
+          p1Reveals,
+          p2Reveals,
         );
 
         console.log(
@@ -1289,7 +1387,15 @@ export function useMatchGameState(lobbyId?: string) {
         return updatedZones;
       });
     },
-    [p1Lists, p2Lists, syncMatchStateToFirestore, p1Score, p2Score],
+    [
+      p1Lists,
+      p2Lists,
+      syncMatchStateToFirestore,
+      p1Score,
+      p2Score,
+      p1Reveals,
+      p2Reveals,
+    ],
   );
 
   // Move a specific card from discard pile into hand
@@ -1309,7 +1415,6 @@ export function useMatchGameState(lobbyId?: string) {
         ];
 
         const updatedZones: ZoneCardMap = { ...prevZones };
-
         updatedZones[discardZoneId] = newSource;
 
         const seat: PlayerSeat =
@@ -1341,11 +1446,7 @@ export function useMatchGameState(lobbyId?: string) {
                   ...p1Lists.discard.slice(0, discardIndex),
                   ...p1Lists.discard.slice(discardIndex + 1),
                 ];
-
-          newP1 = {
-            ...p1Lists,
-            discard: newDiscard,
-          };
+          newP1 = { ...p1Lists, discard: newDiscard };
         } else if (seat === 'p2' && p2Lists) {
           const discardIndex = p2Lists.discard.findIndex(
             (c) => c.id === cardToMove.card.id,
@@ -1357,11 +1458,7 @@ export function useMatchGameState(lobbyId?: string) {
                   ...p2Lists.discard.slice(0, discardIndex),
                   ...p2Lists.discard.slice(discardIndex + 1),
                 ];
-
-          newP2 = {
-            ...p2Lists,
-            discard: newDiscard,
-          };
+          newP2 = { ...p2Lists, discard: newDiscard };
         }
 
         if (newP1 !== p1Lists) setP1Lists(newP1);
@@ -1374,6 +1471,8 @@ export function useMatchGameState(lobbyId?: string) {
           updatedZones,
           p1Score,
           p2Score,
+          p1Reveals,
+          p2Reveals,
         );
 
         console.log(
@@ -1388,7 +1487,15 @@ export function useMatchGameState(lobbyId?: string) {
         return updatedZones;
       });
     },
-    [p1Lists, p2Lists, syncMatchStateToFirestore, p1Score, p2Score],
+    [
+      p1Lists,
+      p2Lists,
+      syncMatchStateToFirestore,
+      p1Score,
+      p2Score,
+      p1Reveals,
+      p2Reveals,
+    ],
   );
 
   // Click main deck → draw top card from main deck into hand (face-up).
@@ -1403,7 +1510,6 @@ export function useMatchGameState(lobbyId?: string) {
 
       if (seat === 'p1') {
         if (!p1Lists || p1Lists.mainDeck.length === 0) return;
-
         const [top, ...rest] = p1Lists.mainDeck;
 
         console.log(
@@ -1444,12 +1550,14 @@ export function useMatchGameState(lobbyId?: string) {
             updatedZones,
             p1Score,
             p2Score,
+            p1Reveals,
+            p2Reveals,
           );
+
           return updatedZones;
         });
       } else {
         if (!p2Lists || p2Lists.mainDeck.length === 0) return;
-
         const [top, ...rest] = p2Lists.mainDeck;
 
         console.log(
@@ -1490,12 +1598,23 @@ export function useMatchGameState(lobbyId?: string) {
             updatedZones,
             p1Score,
             p2Score,
+            p1Reveals,
+            p2Reveals,
           );
+
           return updatedZones;
         });
       }
     },
-    [p1Lists, p2Lists, syncMatchStateToFirestore, p1Score, p2Score],
+    [
+      p1Lists,
+      p2Lists,
+      syncMatchStateToFirestore,
+      p1Score,
+      p2Score,
+      p1Reveals,
+      p2Reveals,
+    ],
   );
 
   // Click rune pile → draw top rune into rune channel (no auto-rotate).
@@ -1510,7 +1629,6 @@ export function useMatchGameState(lobbyId?: string) {
 
       if (seat === 'p1') {
         if (!p1Lists || p1Lists.runes.length === 0) return;
-
         const [top, ...rest] = p1Lists.runes;
 
         const newP1Lists: PlayerCardLists = {
@@ -1535,12 +1653,14 @@ export function useMatchGameState(lobbyId?: string) {
             updatedZones,
             p1Score,
             p2Score,
+            p1Reveals,
+            p2Reveals,
           );
+
           return updatedZones;
         });
       } else {
         if (!p2Lists || p2Lists.runes.length === 0) return;
-
         const [top, ...rest] = p2Lists.runes;
 
         const newP2Lists: PlayerCardLists = {
@@ -1565,12 +1685,220 @@ export function useMatchGameState(lobbyId?: string) {
             updatedZones,
             p1Score,
             p2Score,
+            p1Reveals,
+            p2Reveals,
           );
+
           return updatedZones;
         });
       }
     },
-    [p1Lists, p2Lists, syncMatchStateToFirestore, p1Score, p2Score],
+    [
+      p1Lists,
+      p2Lists,
+      syncMatchStateToFirestore,
+      p1Score,
+      p2Score,
+      p1Reveals,
+      p2Reveals,
+    ],
+  );
+
+  // Shuffle main deck
+  const shuffleMainDeck = useCallback(
+    (seat: PlayerSeat) => {
+      if (seat === 'p1') {
+        if (!p1Lists || p1Lists.mainDeck.length <= 1) return;
+        const shuffled = shuffleArray(p1Lists.mainDeck);
+        const newP1Lists: PlayerCardLists = {
+          ...p1Lists,
+          mainDeck: shuffled,
+        };
+        setP1Lists(newP1Lists);
+
+        void syncMatchStateToFirestore(
+          newP1Lists,
+          p2Lists,
+          zoneCards,
+          p1Score,
+          p2Score,
+          p1Reveals,
+          p2Reveals,
+        );
+      } else {
+        if (!p2Lists || p2Lists.mainDeck.length <= 1) return;
+        const shuffled = shuffleArray(p2Lists.mainDeck);
+        const newP2Lists: PlayerCardLists = {
+          ...p2Lists,
+          mainDeck: shuffled,
+        };
+        setP2Lists(newP2Lists);
+
+        void syncMatchStateToFirestore(
+          p1Lists,
+          newP2Lists,
+          zoneCards,
+          p1Score,
+          p2Score,
+          p1Reveals,
+          p2Reveals,
+        );
+      }
+    },
+    [
+      p1Lists,
+      p2Lists,
+      zoneCards,
+      syncMatchStateToFirestore,
+      p1Score,
+      p2Score,
+      p1Reveals,
+      p2Reveals,
+    ],
+  );
+
+  // Shuffle rune deck
+  const shuffleRuneDeck = useCallback(
+    (seat: PlayerSeat) => {
+      if (seat === 'p1') {
+        if (!p1Lists || p1Lists.runes.length <= 1) return;
+        const shuffled = shuffleArray(p1Lists.runes);
+        const newP1Lists: PlayerCardLists = {
+          ...p1Lists,
+          runes: shuffled,
+        };
+        setP1Lists(newP1Lists);
+
+        void syncMatchStateToFirestore(
+          newP1Lists,
+          p2Lists,
+          zoneCards,
+          p1Score,
+          p2Score,
+          p1Reveals,
+          p2Reveals,
+        );
+      } else {
+        if (!p2Lists || p2Lists.runes.length <= 1) return;
+        const shuffled = shuffleArray(p2Lists.runes);
+        const newP2Lists: PlayerCardLists = {
+          ...p2Lists,
+          runes: shuffled,
+        };
+        setP2Lists(newP2Lists);
+
+        void syncMatchStateToFirestore(
+          p1Lists,
+          newP2Lists,
+          zoneCards,
+          p1Score,
+          p2Score,
+          p1Reveals,
+          p2Reveals,
+        );
+      }
+    },
+    [
+      p1Lists,
+      p2Lists,
+      zoneCards,
+      syncMatchStateToFirestore,
+      p1Score,
+      p2Score,
+      p1Reveals,
+      p2Reveals,
+    ],
+  );
+
+  // Sync reveals for a seat: reveal top N cards of their main deck to the opponent
+  const syncRevealsForSeat = useCallback(
+    (seat: PlayerSeat, count: number) => {
+      const lists = seat === 'p1' ? p1Lists : p2Lists;
+      if (!lists || lists.mainDeck.length === 0) return;
+
+      const clamped = Math.min(
+        Math.max(count, 0),
+        lists.mainDeck.length,
+      );
+      const revealCards = lists.mainDeck.slice(0, clamped);
+
+      if (seat === 'p1') {
+        const newP1Reveals = revealCards;
+        setP1Reveals(newP1Reveals);
+        void syncMatchStateToFirestore(
+          p1Lists,
+          p2Lists,
+          zoneCards,
+          p1Score,
+          p2Score,
+          newP1Reveals,
+          p2Reveals,
+        );
+      } else {
+        const newP2Reveals = revealCards;
+        setP2Reveals(newP2Reveals);
+        void syncMatchStateToFirestore(
+          p1Lists,
+          p2Lists,
+          zoneCards,
+          p1Score,
+          p2Score,
+          p1Reveals,
+          newP2Reveals,
+        );
+      }
+    },
+    [
+      p1Lists,
+      p2Lists,
+      zoneCards,
+      p1Score,
+      p2Score,
+      p1Reveals,
+      p2Reveals,
+      syncMatchStateToFirestore,
+    ],
+  );
+
+  // Clear reveals for a seat (e.g. when closing manage deck window)
+  const clearRevealsForSeat = useCallback(
+    (seat: PlayerSeat) => {
+      if (seat === 'p1') {
+        const newP1Reveals: RiftboundCard[] = [];
+        setP1Reveals(newP1Reveals);
+        void syncMatchStateToFirestore(
+          p1Lists,
+          p2Lists,
+          zoneCards,
+          p1Score,
+          p2Score,
+          newP1Reveals,
+          p2Reveals,
+        );
+      } else {
+        const newP2Reveals: RiftboundCard[] = [];
+        setP2Reveals(newP2Reveals);
+        void syncMatchStateToFirestore(
+          p1Lists,
+          p2Lists,
+          zoneCards,
+          p1Score,
+          p2Score,
+          p1Reveals,
+          newP2Reveals,
+        );
+      }
+    },
+    [
+      p1Lists,
+      p2Lists,
+      zoneCards,
+      p1Score,
+      p2Score,
+      p1Reveals,
+      p2Reveals,
+      syncMatchStateToFirestore,
+    ],
   );
 
   // Score controls
@@ -1582,25 +1910,62 @@ export function useMatchGameState(lobbyId?: string) {
       setP1Score(newP1);
       setP2Score(newP2);
 
-      void syncMatchStateToFirestore(p1Lists, p2Lists, zoneCards, newP1, newP2);
+      void syncMatchStateToFirestore(
+        p1Lists,
+        p2Lists,
+        zoneCards,
+        newP1,
+        newP2,
+        p1Reveals,
+        p2Reveals,
+      );
     },
-    [p1Score, p2Score, p1Lists, p2Lists, zoneCards, syncMatchStateToFirestore],
+    [
+      p1Score,
+      p2Score,
+      p1Lists,
+      p2Lists,
+      zoneCards,
+      syncMatchStateToFirestore,
+      p1Reveals,
+      p2Reveals,
+    ],
   );
 
   const decrementScore = useCallback(
     (seat: PlayerSeat) => {
-      const newP1 =
-        seat === 'p1' ? Math.max(0, p1Score - 1) : p1Score;
-      const newP2 =
-        seat === 'p2' ? Math.max(0, p2Score - 1) : p2Score;
+      const newP1 = seat === 'p1' ? Math.max(0, p1Score - 1) : p1Score;
+      const newP2 = seat === 'p2' ? Math.max(0, p2Score - 1) : p2Score;
 
       setP1Score(newP1);
       setP2Score(newP2);
 
-      void syncMatchStateToFirestore(p1Lists, p2Lists, zoneCards, newP1, newP2);
+      void syncMatchStateToFirestore(
+        p1Lists,
+        p2Lists,
+        zoneCards,
+        newP1,
+        newP2,
+        p1Reveals,
+        p2Reveals,
+      );
     },
-    [p1Score, p2Score, p1Lists, p2Lists, zoneCards, syncMatchStateToFirestore],
+    [
+      p1Score,
+      p2Score,
+      p1Lists,
+      p2Lists,
+      zoneCards,
+      syncMatchStateToFirestore,
+      p1Reveals,
+      p2Reveals,
+    ],
   );
+
+  const p1MainDeckCards = p1Lists?.mainDeck ?? [];
+  const p2MainDeckCards = p2Lists?.mainDeck ?? [];
+  const p1RuneDeckCards = p1Lists?.runes ?? [];
+  const p2RuneDeckCards = p2Lists?.runes ?? [];
 
   return {
     user,
@@ -1625,5 +1990,18 @@ export function useMatchGameState(lobbyId?: string) {
     p2Score,
     incrementScore,
     decrementScore,
+    // Deck & rune lists for UI
+    p1MainDeckCards,
+    p2MainDeckCards,
+    p1RuneDeckCards,
+    p2RuneDeckCards,
+    // Shuffle
+    shuffleMainDeck,
+    shuffleRuneDeck,
+    // Reveals (used to show opponent's reveal popup)
+    p1Reveals,
+    p2Reveals,
+    syncRevealsForSeat,
+    clearRevealsForSeat,
   };
 }
