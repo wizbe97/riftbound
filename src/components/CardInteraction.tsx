@@ -32,7 +32,10 @@ type CardInteractionProps = {
   overlay?: React.ReactNode;
 };
 
-type PreviewPos = { top: number; left: number };
+type PreviewPos = {
+  top: number;
+  left: number;
+};
 
 type ContextMenuState = {
   visible: boolean;
@@ -117,8 +120,7 @@ export function CardInteraction({
     };
 
     document.addEventListener('mousedown', handleDocMouseDown);
-    return () =>
-      document.removeEventListener('mousedown', handleDocMouseDown);
+    return () => document.removeEventListener('mousedown', handleDocMouseDown);
   }, [menu.visible]);
 
   const updatePreviewPosition = useCallback((target: HTMLElement) => {
@@ -131,7 +133,6 @@ export function CardInteraction({
     const MARGIN = 16;
 
     const cardCenterX = rect.left + rect.width / 2;
-
     let top = 0;
     let left = 0;
 
@@ -200,7 +201,14 @@ export function CardInteraction({
         'rotations',
         rotationDocId,
       );
-      await setDoc(rotationRef, { rotation: next }, { merge: true });
+
+      await setDoc(
+        rotationRef,
+        {
+          rotation: next,
+        },
+        { merge: true },
+      );
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('[CardInteraction] Failed to rotate card', err);
@@ -324,10 +332,7 @@ export function CardInteraction({
       {previewEnabled && isHovered && (
         <div
           className="rb-card-preview"
-          style={{
-            top: previewPos.top,
-            left: previewPos.left,
-          }}
+          style={{ top: previewPos.top, left: previewPos.left }}
         >
           <div className="rb-card-preview-inner">
             <img
@@ -343,7 +348,7 @@ export function CardInteraction({
       {menu.visible && (
         <div
           ref={menuRef}
-          className="fixed z-[70] rounded-md border border-slate-600 bg-slate-900/95 px-2 py-1 text-xs text-slate-100 shadow-lg"
+          className="fixed z-[120] rounded-md border border-slate-600 bg-slate-900/95 px-2 py-1 text-xs text-slate-100 shadow-lg"
           style={{ top: menu.y, left: menu.x }}
         >
           {isDiscardModal ? (

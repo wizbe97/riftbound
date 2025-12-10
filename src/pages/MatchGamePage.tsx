@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { useParams } from 'react-router-dom';
+
 import '../styles/gameplay.css';
+
 import type { BoardZoneId } from '../game/boardConfig';
 import {
   useMatchGameState,
@@ -10,6 +12,7 @@ import {
   type ZoneCard,
 } from '../game/useMatchGameState';
 import { MatchDeckSelectOverlay } from './MatchDeckSelectPage';
+
 import runeBackImg from '../assets/rune-back.png';
 import cardBackImg from '../assets/back-of-card.jpg';
 import { CardInteraction } from '../components/CardInteraction';
@@ -119,7 +122,11 @@ function MatchGamePage() {
   }
 
   const mySeatFromLobby: PlayerSeat | null =
-    lobby.p1?.uid === user.uid ? 'p1' : lobby.p2?.uid === user.uid ? 'p2' : null;
+    lobby.p1?.uid === user.uid
+      ? 'p1'
+      : lobby.p2?.uid === user.uid
+      ? 'p2'
+      : null;
 
   const bottomPlayer: 'p1' | 'p2' = mySeatFromLobby ?? 'p1';
   const topPlayer: 'p1' | 'p2' = bottomPlayer === 'p1' ? 'p2' : 'p1';
@@ -507,7 +514,6 @@ function GameBoardLayout({
   canEditBottomScore,
 }: GameBoardLayoutProps) {
   const [windowSize, setWindowSize] = useState({ width: 0, height: 0 });
-
   const [discardMenu, setDiscardMenu] = useState<DiscardMenuState>({
     visible: false,
     x: 0,
@@ -516,14 +522,12 @@ function GameBoardLayout({
     ownerSeat: null,
     ownerName: '',
   });
-
   const [discardModal, setDiscardModal] = useState<DiscardModalState>({
     open: false,
     zoneId: null,
     ownerSeat: null,
     ownerName: '',
   });
-
   const [topScoreFlash, setTopScoreFlash] = useState(false);
   const [bottomScoreFlash, setBottomScoreFlash] = useState(false);
 
@@ -536,13 +540,14 @@ function GameBoardLayout({
     const handleDocMouseDown = (e: MouseEvent) => {
       const target = e.target as Node | null;
       if (!target) return;
+
       if (discardMenuRef.current?.contains(target)) return;
+
       setDiscardMenu((prev) => ({ ...prev, visible: false }));
     };
 
     document.addEventListener('mousedown', handleDocMouseDown);
-    return () =>
-      document.removeEventListener('mousedown', handleDocMouseDown);
+    return () => document.removeEventListener('mousedown', handleDocMouseDown);
   }, [discardMenu.visible]);
 
   // Window size for hand fan overlap logic
@@ -550,10 +555,7 @@ function GameBoardLayout({
     if (typeof window === 'undefined') return;
 
     const handleResize = () => {
-      setWindowSize({
-        width: window.innerWidth,
-        height: window.innerHeight,
-      });
+      setWindowSize({ width: window.innerWidth, height: window.innerHeight });
     };
 
     handleResize();
@@ -638,7 +640,6 @@ function GameBoardLayout({
     }
 
     const existingInTarget = zoneCards[toZoneId] ?? [];
-
     if (cell.kind === 'card' && existingInTarget.length > 0) {
       return;
     }
@@ -700,7 +701,8 @@ function GameBoardLayout({
       y: clientY,
       zoneId: cell.zoneId,
       ownerSeat: zoneOwner,
-      ownerName: ownerName || (zoneOwner === 'p1' ? 'Player 1' : 'Player 2'),
+      ownerName:
+        ownerName || (zoneOwner === 'p1' ? 'Player 1' : 'Player 2'),
     });
   };
 
@@ -731,6 +733,7 @@ function GameBoardLayout({
       ownerSeat: discardMenu.ownerSeat,
       ownerName: discardMenu.ownerName,
     });
+
     setDiscardMenu((prev) => ({ ...prev, visible: false }));
   };
 
@@ -772,10 +775,11 @@ function GameBoardLayout({
 
           const base =
             'relative flex items-center justify-center rounded-xl border border-amber-500/40 ' +
-            (cell.kind === 'rectWide' ? 'overflow-hidden' : 'overflow-visible');
+            (cell.kind === 'rectWide'
+              ? 'overflow-hidden'
+              : 'overflow-visible');
 
           const paddingClass = cell.kind === 'card' ? 'p-0' : 'px-3';
-
           const kindClass =
             cell.kind === 'card'
               ? 'rb-zone-card-slot-inner bg-slate-900/60'
@@ -783,6 +787,7 @@ function GameBoardLayout({
 
           const cardsInZone = zoneCards[cell.zoneId] ?? [];
           const zoneOwner = getZoneOwnerFromId(cell.zoneId);
+
           const canInteractBase =
             mySeat !== null && zoneOwner !== null && mySeat === zoneOwner;
 
@@ -790,11 +795,9 @@ function GameBoardLayout({
           const isHandZone =
             (cell.zoneId as string) === 'p1Hand' ||
             (cell.zoneId as string) === 'p2Hand';
-
           const isRuneChannelZone =
             (cell.zoneId as string) === 'p1RuneChannel' ||
             (cell.zoneId as string) === 'p2RuneChannel';
-
           const isLegendZone =
             (cell.zoneId as string) === 'p1LegendZone' ||
             (cell.zoneId as string) === 'p2LegendZone';
@@ -877,7 +880,7 @@ function GameBoardLayout({
                   <div className="rb-pile-inner cursor-pointer">
                     <CardInteraction
                       card={topZc.card}
-                      canInteract={true}
+                      canInteract
                       lobbyId={lobbyId}
                       zoneId={cell.zoneId}
                       indexInZone={topIndex}
@@ -915,9 +918,7 @@ function GameBoardLayout({
           } else if (cardsInZone.length > 0) {
             if (cell.kind === 'card') {
               const zoneCard = cardsInZone[0];
-
-              const canInteract =
-                canInteractBase && !isLegendZone; // legend immutable
+              const canInteract = canInteractBase && !isLegendZone; // legend immutable
 
               innerContent = (
                 <CardInteraction
@@ -940,6 +941,7 @@ function GameBoardLayout({
             } else {
               const count = cardsInZone.length;
 
+              // Shared fan/overlap logic for hands AND rune channels
               let overlapPx = 0;
               if (count > maxFullWidthCards) {
                 const overflow = count - maxFullWidthCards;
@@ -953,15 +955,14 @@ function GameBoardLayout({
                   <div className="flex h-full items-center justify-center">
                     {cardsInZone.map((zc, idx) => {
                       const isRuneCardInChannel = isRuneChannelZone;
-
                       let marginLeft = 0;
+
                       if (idx !== 0 && count > 1) {
-                        // For rune channel: no overlap so recycle is always visible
-                        marginLeft = isRuneCardInChannel ? 6 : overlapPx;
+                        // Fan for all rect-wide zones (hand + rune channel)
+                        marginLeft = overlapPx;
                       }
 
-                      const canInteract =
-                        canInteractBase && !isLegendZone;
+                      const canInteract = canInteractBase && !isLegendZone;
 
                       // Hand: hide opponent cards
                       if (isHandZone && !showRealCardsInRectZone) {
@@ -981,11 +982,14 @@ function GameBoardLayout({
                         );
                       }
 
+                      // Left-most should be on top: reverse z-index ordering
+                      const zIndex = 10 + (count - idx);
+
                       return (
                         <div
                           key={`${cell.zoneId}-${idx}-${zc.card.id}`}
                           className="rb-zone-card-slot-inner"
-                          style={{ marginLeft, zIndex: 10 + idx }}
+                          style={{ marginLeft, zIndex }}
                         >
                           <div className="relative h-full w-full">
                             <CardInteraction
@@ -1004,13 +1008,20 @@ function GameBoardLayout({
                                   ? handleSendRuneToBottomFromCard
                                   : handleSendToBottomFromCard
                               }
-                              mode={isRuneCardInChannel ? 'rune' : 'default'}
+                              mode={
+                                isRuneCardInChannel ? 'rune' : 'default'
+                              }
                               overlay={
                                 isRuneCardInChannel &&
                                 canInteract && (
                                   <button
                                     type="button"
                                     className="rb-rune-recycle-btn"
+                                    style={{
+                                      top: '4px',
+                                      left: '4px',
+                                      right: 'auto',
+                                    }}
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       handleSendRuneToBottomFromCard(
@@ -1046,14 +1057,15 @@ function GameBoardLayout({
               data-zone-id={cell.zoneId}
               onDragOver={(e) => handleDragOverCell(e, cell)}
               onDrop={(e) => handleDropOnCell(e, cell)}
-              onContextMenu={(e) =>
+              onContextMenu={
                 isDiscardCell
-                  ? handleDiscardCellContextMenu(e, cell, zoneOwner)
+                  ? (e) =>
+                      handleDiscardCellContextMenu(e, cell, zoneOwner)
                   : undefined
               }
-              onClick={(e) =>
+              onClick={
                 isDiscardCell
-                  ? handleDiscardCellClick(e, cell, zoneOwner)
+                  ? (e) => handleDiscardCellClick(e, cell, zoneOwner)
                   : undefined
               }
             >
@@ -1062,7 +1074,6 @@ function GameBoardLayout({
                   {cell.debugLabel}
                 </span>
               )}
-
               {innerContent}
             </div>
           );
@@ -1091,7 +1102,6 @@ function GameBoardLayout({
                   ▲
                 </button>
               )}
-
               <span
                 className={`rb-score-value min-w-[1.5rem] text-center ${
                   topScoreFlash ? 'text-red-400' : 'text-slate-50'
@@ -1099,7 +1109,6 @@ function GameBoardLayout({
               >
                 {topScore}
               </span>
-
               {canEditTopScore && (
                 <button
                   type="button"
@@ -1110,7 +1119,6 @@ function GameBoardLayout({
                 </button>
               )}
             </div>
-
             <div className="mt-1 text-[10px] tracking-wide text-slate-400">
               SCORE
             </div>
@@ -1140,7 +1148,6 @@ function GameBoardLayout({
                   ▲
                 </button>
               )}
-
               <span
                 className={`rb-score-value min-w-[1.5rem] text-center ${
                   bottomScoreFlash ? 'text-red-400' : 'text-slate-50'
@@ -1148,7 +1155,6 @@ function GameBoardLayout({
               >
                 {bottomScore}
               </span>
-
               {canEditBottomScore && (
                 <button
                   type="button"
@@ -1159,7 +1165,6 @@ function GameBoardLayout({
                 </button>
               )}
             </div>
-
             <div className="mt-1 text-[10px] tracking-wide text-slate-400">
               SCORE
             </div>
@@ -1170,7 +1175,7 @@ function GameBoardLayout({
       {discardMenu.visible && discardMenu.zoneId && (
         <div
           ref={discardMenuRef}
-          className="fixed z-[70] rounded-md border border-slate-600 bg-slate-900/95 px-2 py-1 text-xs text-slate-100 shadow-lg"
+          className="fixed z-[110] rounded-md border border-slate-600 bg-slate-900/95 px-2 py-1 text-xs text-slate-100 shadow-lg"
           style={{ top: discardMenu.y, left: discardMenu.x }}
         >
           <button
@@ -1193,7 +1198,9 @@ function GameBoardLayout({
           mySeat={mySeat}
           discardZoneId={discardModal.zoneId}
           lobbyId={lobbyId}
-          moveCardFromDiscardToBottomOfDeck={moveCardFromDiscardToBottomOfDeck}
+          moveCardFromDiscardToBottomOfDeck={
+            moveCardFromDiscardToBottomOfDeck
+          }
           moveCardFromDiscardToHand={moveCardFromDiscardToHand}
         />
       )}
@@ -1260,7 +1267,9 @@ function DiscardPileModal({
         </div>
 
         {cards.length === 0 ? (
-          <p className="text-xs text-slate-300">No cards in discard pile.</p>
+          <p className="text-xs text-slate-300">
+            No cards in discard pile.
+          </p>
         ) : (
           <div className="grid max-h-[60vh] grid-cols-3 gap-2 overflow-y-auto pr-1">
             {cards.map((zc, index) => (
@@ -1277,7 +1286,10 @@ function DiscardPileModal({
                   mode="discard-modal"
                   disableRotate
                   onSendToBottomOfDeck={() =>
-                    moveCardFromDiscardToBottomOfDeck(discardZoneId, index)
+                    moveCardFromDiscardToBottomOfDeck(
+                      discardZoneId,
+                      index,
+                    )
                   }
                   onSendToHandFromDiscard={() =>
                     moveCardFromDiscardToHand(discardZoneId, index)
