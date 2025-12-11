@@ -92,6 +92,8 @@ export type PlayerCardLists = {
 export type ZoneCard = {
   card: RiftboundCard;
   ownerSeat: PlayerSeat;
+  /** Stable per-card instance id used for rotation/hidden state */
+  instanceId: string;
 };
 
 /** Each zone can hold multiple cards (hands, battlefields, etc.) */
@@ -102,6 +104,7 @@ export type ZoneCardMap = Partial<Record<BoardZoneId, ZoneCard[]>>;
 type WireZoneCard = {
   cardId: string;
   ownerSeat: PlayerSeat;
+  instanceId: string;
 };
 
 type WireZoneCardMap = Partial<Record<BoardZoneId, WireZoneCard[]>>;
@@ -268,9 +271,7 @@ function logCardRemovalAndLists(
       lists.battlefields,
     )}\n` +
     `[${seatLabel}] Runes list: ${stringifyCardList(lists.runes)}\n` +
-    `[${seatLabel}] Main deck list: ${stringifyCardList(
-      lists.mainDeck,
-    )}\n` +
+    `[${seatLabel}] Main deck list: ${stringifyCardList(lists.mainDeck)}\n` +
     `[${seatLabel}] Discard list: ${stringifyCardList(lists.discard)}`;
 
   // eslint-disable-next-line no-console
@@ -324,6 +325,7 @@ function toWireZoneCards(zones: ZoneCardMap): WireZoneCardMap {
     result[zoneId] = cards.map((zc) => ({
       cardId: zc.card.id,
       ownerSeat: zc.ownerSeat,
+      instanceId: zc.instanceId,
     }));
   }
   return result;
@@ -344,7 +346,17 @@ function fromWireZoneCards(
         .map((w) => {
           const card = cardById.get(w.cardId);
           if (!card) return null;
-          return { card, ownerSeat: w.ownerSeat };
+
+          const instanceId =
+            typeof w.instanceId === 'string' && w.instanceId.length > 0
+              ? w.instanceId
+              : `${w.ownerSeat}-${w.cardId}-inst`;
+
+          return {
+            card,
+            ownerSeat: w.ownerSeat,
+            instanceId,
+          };
         })
         .filter((x): x is ZoneCard => x !== null) ?? [];
   }
@@ -385,6 +397,23 @@ function shuffleArray<T>(arr: T[]): T[] {
     [copy[i], copy[j]] = [copy[j], copy[i]];
   }
   return copy;
+}
+
+// Stable card instance IDs for board state
+let zoneCardInstanceCounter = 1;
+
+function createZoneCard(
+  card: RiftboundCard,
+  ownerSeat: PlayerSeat,
+): ZoneCard {
+  const instanceId = `${ownerSeat}-${card.id}-${Date.now()}-${
+    zoneCardInstanceCounter++
+  }`;
+  return {
+    card,
+    ownerSeat,
+    instanceId,
+  };
 }
 
 // ---------- Hook: all non-layout match logic lives here ----------
@@ -708,9 +737,9 @@ export function useMatchGameState(lobbyId?: string) {
     }
   }, [p2DeckDoc, cardById]);
 
-  // Helper: auto-rotate card when moved between zones, except hand / rune channel / legends
+  // Helper: auto-rotate card when moved between zones, except hand / rune channel / legends / discard
   const autoRotateCardOnMove = useCallback(
-    async (card: RiftboundCard, toZoneId: BoardZoneId, indexInZone: number) => {
+    async (zoneCard: ZoneCard, toZoneId: BoardZoneId) => {
       if (!lobbyId) return;
 
       const zoneStr = toZoneId as string;
@@ -720,7 +749,8 @@ export function useMatchGameState(lobbyId?: string) {
         zoneStr === 'p1RuneChannel' ||
         zoneStr === 'p2RuneChannel' ||
         zoneStr === 'p1LegendZone' ||
-        zoneStr === 'p2LegendZone'
+        zoneStr === 'p2LegendZone' ||
+        zoneStr.endsWith('Discard')
       ) {
         return;
       }
@@ -731,7 +761,7 @@ export function useMatchGameState(lobbyId?: string) {
           'lobbies',
           lobbyId,
           'rotations',
-          `${toZoneId}-${card.id}-${indexInZone}`,
+          zoneCard.instanceId,
         );
         await setDoc(
           rotationRef,
@@ -854,19 +884,13 @@ export function useMatchGameState(lobbyId?: string) {
 
       if (p1LegendCard) {
         next.p1LegendZone = [
-          {
-            card: p1LegendCard,
-            ownerSeat: 'p1',
-          },
+          createZoneCard(p1LegendCard, 'p1'),
         ];
       }
 
       if (p1ChampionCard) {
         next.p1ChampionZone = [
-          {
-            card: p1ChampionCard,
-            ownerSeat: 'p1',
-          },
+          createZoneCard(p1ChampionCard, 'p1'),
         ];
       }
 
@@ -943,19 +967,13 @@ export function useMatchGameState(lobbyId?: string) {
 
       if (p2LegendCard) {
         next.p2LegendZone = [
-          {
-            card: p2LegendCard,
-            ownerSeat: 'p2',
-          },
+          createZoneCard(p2LegendCard, 'p2'),
         ];
       }
 
       if (p2ChampionCard) {
         next.p2ChampionZone = [
-          {
-            card: p2ChampionCard,
-            ownerSeat: 'p2',
-          },
+          createZoneCard(p2ChampionCard, 'p2'),
         ];
       }
 
@@ -1085,8 +1103,7 @@ export function useMatchGameState(lobbyId?: string) {
         if (newP1 !== p1Lists) setP1Lists(newP1);
         if (newP2 !== p2Lists) setP2Lists(newP2);
 
-        const newIndex = (updatedZones[toZoneId]?.length ?? 1) - 1;
-        void autoRotateCardOnMove(cardToMove.card, toZoneId, newIndex);
+        void autoRotateCardOnMove(cardToMove, toZoneId);
 
         void syncMatchStateToFirestore(
           newP1,
@@ -1164,8 +1181,7 @@ export function useMatchGameState(lobbyId?: string) {
         if (newP1 !== p1Lists) setP1Lists(newP1);
         if (newP2 !== p2Lists) setP2Lists(newP2);
 
-        const newIndex = (updatedZones[toDiscardZoneId]?.length ?? 1) - 1;
-        void autoRotateCardOnMove(cardToMove.card, toDiscardZoneId, newIndex);
+        // No auto-rotate when moving into discard; visual uprightness is handled in the UI.
 
         void syncMatchStateToFirestore(
           newP1,
@@ -1192,7 +1208,6 @@ export function useMatchGameState(lobbyId?: string) {
     [
       p1Lists,
       p2Lists,
-      autoRotateCardOnMove,
       syncMatchStateToFirestore,
       p1Score,
       p2Score,
@@ -1427,10 +1442,7 @@ export function useMatchGameState(lobbyId?: string) {
           seat === 'p1' ? 'p1Hand' : 'p2Hand';
 
         const existingHand = updatedZones[handZoneId] ?? [];
-        updatedZones[handZoneId] = [
-          ...existingHand,
-          { card: cardToMove.card, ownerSeat: seat },
-        ];
+        updatedZones[handZoneId] = [...existingHand, cardToMove];
 
         let newP1 = p1Lists;
         let newP2 = p2Lists;
@@ -1530,7 +1542,7 @@ export function useMatchGameState(lobbyId?: string) {
         setZoneCards((prevZones) => {
           const handZoneId: BoardZoneId = 'p1Hand';
           const existing = prevZones[handZoneId] ?? [];
-          const newCard: ZoneCard = { card: top, ownerSeat: 'p1' };
+          const newCard: ZoneCard = createZoneCard(top, 'p1');
 
           const updatedZones: ZoneCardMap = {
             ...prevZones,
@@ -1578,7 +1590,7 @@ export function useMatchGameState(lobbyId?: string) {
         setZoneCards((prevZones) => {
           const handZoneId: BoardZoneId = 'p2Hand';
           const existing = prevZones[handZoneId] ?? [];
-          const newCard: ZoneCard = { card: top, ownerSeat: 'p2' };
+          const newCard: ZoneCard = createZoneCard(top, 'p2');
 
           const updatedZones: ZoneCardMap = {
             ...prevZones,
@@ -1640,7 +1652,7 @@ export function useMatchGameState(lobbyId?: string) {
         setZoneCards((prevZones) => {
           const runeChannelZoneId: BoardZoneId = 'p1RuneChannel';
           const existing = prevZones[runeChannelZoneId] ?? [];
-          const newCard: ZoneCard = { card: top, ownerSeat: 'p1' };
+          const newCard: ZoneCard = createZoneCard(top, 'p1');
 
           const updatedZones: ZoneCardMap = {
             ...prevZones,
@@ -1672,7 +1684,7 @@ export function useMatchGameState(lobbyId?: string) {
         setZoneCards((prevZones) => {
           const runeChannelZoneId: BoardZoneId = 'p2RuneChannel';
           const existing = prevZones[runeChannelZoneId] ?? [];
-          const newCard: ZoneCard = { card: top, ownerSeat: 'p2' };
+          const newCard: ZoneCard = createZoneCard(top, 'p2');
 
           const updatedZones: ZoneCardMap = {
             ...prevZones,

@@ -43,6 +43,15 @@ type CardInteractionProps = {
   isOwnerView?: boolean;
   /** Whether the "Hide / Unhide" option should be shown in the context menu */
   allowHide?: boolean;
+  /** If true, ignore rotation state and always render the card upright */
+  forceUpright?: boolean;
+  /**
+   * Stable key for rotation/hidden state. If provided, this is used
+   * directly as the Firestore doc id instead of deriving from
+   * zoneId+card+indexInZone. This prevents index-shift bugs when
+   * cards are removed from a zone.
+   */
+  rotationKey?: string;
 };
 
 type PreviewPos = {
@@ -72,6 +81,8 @@ export function CardInteraction({
   canRotate,
   isOwnerView = false,
   allowHide = false,
+  forceUpright = false,
+  rotationKey,
 }: CardInteractionProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [previewPos, setPreviewPos] = useState<PreviewPos>({
@@ -94,7 +105,10 @@ export function CardInteraction({
   const previewEnabled = !isRuneMode; // no hover preview for rune cards
   const contextMenuBaseEnabled = !disableContextMenu;
 
-  const rotationDocId = `${zoneId}-${card.id}-${indexInZone}`;
+  // Prefer a stable external key if provided, otherwise fall back
+  // to the old zone+card+index-based key.
+  const rotationDocId =
+    rotationKey ?? `${zoneId}-${card.id}-${indexInZone}`;
 
   // Subscribe to per-card rotation + hidden state
   useEffect(() => {
@@ -389,6 +403,9 @@ export function CardInteraction({
       </div>
     ) : null;
 
+  // Final rotation used for rendering; discard pile can force upright by passing forceUpright
+  const renderRotation = forceUpright ? 0 : rotation;
+
   return (
     <>
       <div
@@ -406,10 +423,10 @@ export function CardInteraction({
         <div
           className="relative h-full w-full rounded-md shadow-md transition-transform duration-150"
           style={{
+            // Rotation is purely driven by synced state so both players see it,
+            // unless forceUpright is set (e.g. discard pile).
             transform:
-              effectiveCanRotate && rotation === 90
-                ? 'rotate(90deg)'
-                : 'rotate(0deg)',
+              renderRotation === 90 ? 'rotate(90deg)' : 'rotate(0deg)',
             transformOrigin: '50% 50%',
           }}
         >

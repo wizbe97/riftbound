@@ -608,6 +608,9 @@ function GameBoardLayout({
   const discardMenuRef = useRef<HTMLDivElement | null>(null);
   const deckMenuRef = useRef<HTMLDivElement | null>(null);
 
+  // Lock so only one rune send-to-bottom / reset can happen at once
+  const runeActionLockRef = useRef(false);
+
   // Close discard cell menu
   useEffect(() => {
     if (!discardMenu.visible) return;
@@ -750,6 +753,9 @@ function GameBoardLayout({
     if (!owner) return;
     const discardZoneId: BoardZoneId =
       owner === 'p1' ? 'p1Discard' : 'p2Discard';
+
+    // Visually discard is always upright via forceUpright;
+    // sendCardToDiscard no longer auto-rotates the card.
     sendCardToDiscard(zoneId, index, discardZoneId);
   };
 
@@ -768,11 +774,27 @@ function GameBoardLayout({
     zoneId: BoardZoneId,
     index: number,
   ) => {
+    // HARD LOCK: only one rune send-to-bottom action at a time
+    if (runeActionLockRef.current) return;
+    runeActionLockRef.current = true;
+
     const owner = getZoneOwnerFromId(zoneId);
-    if (!owner) return;
+    if (!owner) {
+      runeActionLockRef.current = false;
+      return;
+    }
     const runeDeckZoneId: BoardZoneId =
       owner === 'p1' ? 'p1RuneDeck' : 'p2RuneDeck';
+
+    // We simply send this rune to the bottom of the rune deck.
+    // Rotation is tracked by a stable per-card instanceId, so the
+    // next time this rune is drawn it will use a fresh instance
+    // and always start upright.
     sendCardToBottomOfDeck(zoneId, index, runeDeckZoneId);
+
+    window.setTimeout(() => {
+      runeActionLockRef.current = false;
+    }, 100);
   };
 
   const openDiscardMenu = (
@@ -973,9 +995,9 @@ function GameBoardLayout({
             zoneIdStr === 'battlefieldRightP1' ||
             zoneIdStr === 'battlefieldRightP2';
 
-          // Only allow Hide/Unhide in our OWN base + battlefield zones
+          // Allow Hide/Unhide in our OWN base, battlefield, and hand zones
           const canHideHere =
-            canInteractBase && (isBaseZone || isBattleZone);
+            canInteractBase && (isBaseZone || isBattleZone || isHandZone);
 
           const showRealCardsInRectZone =
             !isHandZone ||
@@ -1048,11 +1070,12 @@ function GameBoardLayout({
 
               if (mySeat && zoneOwner && mySeat === zoneOwner) {
                 // Our discard: top card is draggable with preview,
-                // no rotation, no card menu
+                // no rotation (forceUpright), no card menu
                 innerContent = (
                   <div className="rb-pile-inner cursor-pointer">
                     <CardInteraction
                       card={topZc.card}
+                      rotationKey={topZc.instanceId}
                       canInteract
                       lobbyId={lobbyId}
                       zoneId={cell.zoneId}
@@ -1063,6 +1086,7 @@ function GameBoardLayout({
                       disableRotate
                       disableContextMenu
                       isOwnerView={isOwnerView}
+                      forceUpright
                     />
                     <span className="rb-pile-count">{count}</span>
                   </div>
@@ -1099,6 +1123,7 @@ function GameBoardLayout({
               innerContent = (
                 <CardInteraction
                   card={zoneCard.card}
+                  rotationKey={zoneCard.instanceId}
                   canInteract={canInteract}
                   canRotate={canRotate}
                   allowHide={canHideHere}
@@ -1174,7 +1199,7 @@ function GameBoardLayout({
                       ) {
                         return (
                           <div
-                            key={`${cell.zoneId}-${idx}-${zc.card.id}`}
+                            key={zc.instanceId}
                             className="rb-zone-card-slot-inner"
                             style={{ marginLeft }}
                           >
@@ -1190,23 +1215,25 @@ function GameBoardLayout({
 
                       return (
                         <div
-                          key={`${cell.zoneId}-${idx}-${zc.card.id}`}
+                          key={zc.instanceId}
                           className="rb-zone-card-slot-inner"
                           style={{
                             marginLeft,
-                            // Left-most card should be on top when fanning
+                            // Left-most card on top: lower idx => higher zIndex
                             zIndex: 10 + (count - idx),
                           }}
                         >
                           <div className="relative h-full w-full">
                             <CardInteraction
                               card={zc.card}
+                              rotationKey={zc.instanceId}
                               canInteract={canInteract}
                               allowHide={canHideHere}
                               isOwnerView={isOwnerView}
                               lobbyId={lobbyId}
                               zoneId={cell.zoneId}
                               indexInZone={idx}
+                              disableRotate={isHandZone}
                               onSendToDiscard={
                                 isRuneCardInChannel
                                   ? undefined
@@ -1228,7 +1255,11 @@ function GameBoardLayout({
                                     type="button"
                                     className="absolute left-1 top-1 z-20 flex h-6 w-6 items-center justify-center rounded-full border border-slate-600 bg-slate-950/90 text-[11px] text-slate-100 shadow hover:border-amber-400 hover:text-amber-200"
                                     onClick={(e) => {
+                                      // Make sure only THIS rune sees the click
+                                      e.preventDefault();
                                       e.stopPropagation();
+                                      (e.nativeEvent as any)
+                                        .stopImmediatePropagation?.();
                                       handleSendRuneToBottomFromCard(
                                         cell.zoneId,
                                         idx,
@@ -1566,11 +1597,12 @@ function DiscardPileModal({
           <div className="grid max-h-[60vh] grid-cols-3 gap-2 overflow-y-auto pr-1">
             {cards.map((zc, index) => (
               <div
-                key={`${zc.card.id}-${index}`}
+                key={zc.instanceId}
                 className="rb-zone-card-slot-inner cursor-pointer"
               >
                 <CardInteraction
                   card={zc.card}
+                  rotationKey={zc.instanceId}
                   canInteract={canEdit}
                   isOwnerView={canEdit}
                   lobbyId={lobbyId}
@@ -1578,6 +1610,7 @@ function DiscardPileModal({
                   indexInZone={index}
                   mode="discard-modal"
                   disableRotate
+                  forceUpright
                   onSendToBottomOfDeck={() =>
                     moveCardFromDiscardToBottomOfDeck(
                       discardZoneId,
