@@ -17,6 +17,7 @@ import { MatchDeckSelectOverlay } from './MatchDeckSelectPage';
 import runeBackImg from '../assets/rune-back.png';
 import cardBackImg from '../assets/back-of-card.jpg';
 import { CardInteraction } from '../components/CardInteraction';
+import { isRuneCard } from '../data/riftboundCards';
 import type { RiftboundCard } from '../data/riftboundCards';
 
 export type ZoneVisualKind = 'card' | 'rectWide';
@@ -714,6 +715,25 @@ function GameBoardLayout({
 
     if (fromOwner !== mySeat || toOwner !== mySeat) return;
 
+    const toZoneIdStr = toZoneId as string;
+    const isRuneChannelTarget =
+      toZoneIdStr === 'p1RuneChannel' || toZoneIdStr === 'p2RuneChannel';
+
+    // Block moving non-rune cards into rune channels
+    if (isRuneChannelTarget) {
+      const fromCards = zoneCards[fromZoneId] ?? [];
+      if (fromIndex < 0 || fromIndex >= fromCards.length) {
+        return;
+      }
+
+      const movingZoneCard = fromCards[fromIndex];
+      const movingIsRune = isRuneCard(movingZoneCard.card);
+
+      if (!movingIsRune) {
+        return;
+      }
+    }
+
     // Legend zone is immutable (no moving)
     if (
       (fromZoneId as string) === 'p1LegendZone' ||
@@ -724,10 +744,10 @@ function GameBoardLayout({
 
     // Can't drag into decks / rune piles
     if (
-      (toZoneId as string) === 'p1Deck' ||
-      (toZoneId as string) === 'p2Deck' ||
-      (toZoneId as string) === 'p1RuneDeck' ||
-      (toZoneId as string) === 'p2RuneDeck'
+      toZoneIdStr === 'p1Deck' ||
+      toZoneIdStr === 'p2Deck' ||
+      toZoneIdStr === 'p1RuneDeck' ||
+      toZoneIdStr === 'p2RuneDeck'
     ) {
       return;
     }
@@ -754,8 +774,6 @@ function GameBoardLayout({
     const discardZoneId: BoardZoneId =
       owner === 'p1' ? 'p1Discard' : 'p2Discard';
 
-    // Visually discard is always upright via forceUpright;
-    // sendCardToDiscard no longer auto-rotates the card.
     sendCardToDiscard(zoneId, index, discardZoneId);
   };
 
@@ -786,10 +804,6 @@ function GameBoardLayout({
     const runeDeckZoneId: BoardZoneId =
       owner === 'p1' ? 'p1RuneDeck' : 'p2RuneDeck';
 
-    // We simply send this rune to the bottom of the rune deck.
-    // Rotation is tracked by a stable per-card instanceId, so the
-    // next time this rune is drawn it will use a fresh instance
-    // and always start upright.
     sendCardToBottomOfDeck(zoneId, index, runeDeckZoneId);
 
     window.setTimeout(() => {
@@ -984,8 +998,6 @@ function GameBoardLayout({
 
           const isRuneDeckZone =
             zoneIdStr === 'p1RuneDeck' || zoneIdStr === 'p2RuneDeck';
-          const isMainDeckZone =
-            zoneIdStr === 'p1Deck' || zoneIdStr === 'p2Deck';
 
           const isBaseZone =
             zoneIdStr === 'p1Base' || zoneIdStr === 'p2Base';
@@ -1069,8 +1081,6 @@ function GameBoardLayout({
               const topZc = discardCards[topIndex];
 
               if (mySeat && zoneOwner && mySeat === zoneOwner) {
-                // Our discard: top card is draggable with preview,
-                // no rotation (forceUpright), no card menu
                 innerContent = (
                   <div className="rb-pile-inner cursor-pointer">
                     <CardInteraction
@@ -1092,7 +1102,6 @@ function GameBoardLayout({
                   </div>
                 );
               } else {
-                // Opponent discard: show face-up top card
                 innerContent = (
                   <div className="rb-pile-inner cursor-pointer">
                     <img
@@ -1116,7 +1125,6 @@ function GameBoardLayout({
           } else if (cardsInZone.length > 0) {
             if (cell.kind === 'card') {
               const zoneCard = cardsInZone[0];
-              // Legend: cannot move, but can rotate (for owner)
               const canInteract = canInteractBase && !isLegendZone;
               const canRotate = isLegendZone ? canInteractBase : undefined;
 
@@ -1162,23 +1170,52 @@ function GameBoardLayout({
                       let marginLeft = 0;
                       if (idx !== 0 && count > 1) {
                         if (isRuneCardInChannel) {
-                          const isBigScreen =
-                            windowSize.width >= 1960 &&
-                            windowSize.height >= 1080;
-                          const runeThreshold = isBigScreen ? 10 : 8;
-                          const baseSpacing = 4; // tighter spacing for small rune counts
+                          // Rune channel fanning:
+                          // - width >= 2400: 7 runes before fanning, then more severe every 2 runes
+                          // - 1800 <= width < 2400: 6 runes before fanning, then more severe every 2 runes
+                          // - width < 1800: 4 runes before fanning, then more severe every rune
+                          const width = windowSize.width;
+                          let baseCapacity: number;
+                          let stepEvery: number;
 
-                          if (count <= runeThreshold) {
+                          if (width >= 2400) {
+                            baseCapacity = 7;
+                            stepEvery = 2;
+                          } else if (width >= 1800) {
+                            baseCapacity = 6;
+                            stepEvery = 2;
+                          } else {
+                            baseCapacity = 4;
+                            stepEvery = 1;
+                          }
+
+                          const baseSpacing = 4;
+                          const maxNegative = -40;
+                          const maxRunesConsidered = 12;
+
+                          const overflow = Math.max(0, count - baseCapacity);
+
+                          if (overflow <= 0) {
+                            // Up to baseCapacity runes: fixed spacing, no fan.
                             marginLeft = baseSpacing;
                           } else {
-                            // Gradually reduce spacing (and eventually overlap)
-                            const maxNegative = -40;
-                            const steps = Math.max(
+                            // Group extra runes into steps and increase fan every `stepEvery` runes.
+                            const stepIndex = Math.floor(
+                              (overflow - 1) / stepEvery,
+                            ); // 0,1,2,...
+                            const maxSteps = Math.max(
                               1,
-                              12 - runeThreshold,
+                              Math.ceil(
+                                (maxRunesConsidered - baseCapacity) /
+                                  stepEvery,
+                              ),
                             );
-                            const t =
-                              (count - runeThreshold) / steps; // 0..1
+
+                            // t progresses from ~1/maxSteps up to 1 as more runes are added.
+                            const t = Math.min(
+                              1,
+                              (stepIndex + 1) / maxSteps,
+                            );
                             const spacing =
                               baseSpacing +
                               t * (maxNegative - baseSpacing);
@@ -1193,10 +1230,7 @@ function GameBoardLayout({
                         canInteractBase && !isLegendZone;
 
                       // Hand: hide opponent cards
-                      if (
-                        isHandZone &&
-                        !showRealCardsInRectZone
-                      ) {
+                      if (isHandZone && !showRealCardsInRectZone) {
                         return (
                           <div
                             key={zc.instanceId}
@@ -1212,6 +1246,8 @@ function GameBoardLayout({
                           </div>
                         );
                       }
+
+                      const isRuneCardInChannelZone = isRuneChannelZone;
 
                       return (
                         <div
@@ -1235,27 +1271,26 @@ function GameBoardLayout({
                               indexInZone={idx}
                               disableRotate={isHandZone}
                               onSendToDiscard={
-                                isRuneCardInChannel
+                                isRuneCardInChannelZone
                                   ? undefined
                                   : handleSendToDiscardFromCard
                               }
                               onSendToBottomOfDeck={
-                                isRuneCardInChannel
+                                isRuneCardInChannelZone
                                   ? handleSendRuneToBottomFromCard
                                   : handleSendToBottomFromCard
                               }
                               mode={
-                                isRuneCardInChannel
+                                isRuneCardInChannelZone
                                   ? 'rune'
                                   : 'default'
                               }
                               overlay={
-                                isRuneCardInChannel && canInteract ? (
+                                isRuneCardInChannelZone && canInteract ? (
                                   <button
                                     type="button"
                                     className="absolute left-1 top-1 z-20 flex h-6 w-6 items-center justify-center rounded-full border border-slate-600 bg-slate-950/90 text-[11px] text-slate-100 shadow hover:border-amber-400 hover:text-amber-200"
                                     onClick={(e) => {
-                                      // Make sure only THIS rune sees the click
                                       e.preventDefault();
                                       e.stopPropagation();
                                       (e.nativeEvent as any)
@@ -1512,10 +1547,7 @@ function GameBoardLayout({
             shuffleMainDeck(deckManageModal.ownerSeat as PlayerSeat)
           }
           onRevealTopCount={(count, revealToOpponent) => {
-            if (
-              revealToOpponent &&
-              deckManageModal.ownerSeat
-            ) {
+            if (revealToOpponent && deckManageModal.ownerSeat) {
               syncRevealsForSeat(
                 deckManageModal.ownerSeat as PlayerSeat,
                 count,
